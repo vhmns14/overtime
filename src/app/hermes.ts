@@ -365,7 +365,7 @@ export class HermesController {
     const s = this.session;
     if (this.mode === "demo") return { html: `<b>Demo</b> · recorded Hermes session · ${this.demoRunning ? (s?.status === "waiting" ? "waiting for approval" : "working") : s ? "done" : "ready"}`, status: this.demoRunning ? (s?.status === "waiting" ? "waiting" : "running") : s ? "done" : "idle" };
     const connTxt = { idle: "offline", connecting: "connecting…", open: "live", polling: "live (polling)", error: "offline" }[this.conn];
-    const who = this.mode === "watch" ? "<b>Read-only</b> · " : "<b>Hermes</b> · ";
+    const who = this.mode === "watch" ? (this.control.paired ? "<b>Viewer</b> · remote control · " : "<b>Read-only</b> · ") : "<b>Hermes</b> · ";
     if (!s) return { html: `${who}${this.mode === "connect" ? "not connected" : connTxt} · waiting for the first event`, status: this.conn === "error" ? "failed" : "idle" };
     const st = { working: "working", idle: "idle", waiting: "waiting in Hermes", ended: "session closed" }[s.status];
     return { html: `${who}${esc(s.model ?? "")} · ${st} · ${connTxt}`, status: s.status === "working" ? "running" : s.status === "waiting" ? "waiting" : this.conn === "error" ? "failed" : "idle" };

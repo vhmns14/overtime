@@ -58,13 +58,74 @@ What you see:
 | "Waiting for approval in Hermes" bubble and a read-only card | `pre_approval_request`, `on_human_input_request` |
 | Step tracker (Plan, Research, Code, Verify, Ship) and the cost meter | derived from activity; cost is Hermes' own estimate per model call |
 
-Rules for who shows what are editable (*Setup → Advanced*). **Overtime never approves anything**: Hermes asks in its own UI; the approval card is read-only, with a clean extension point (`src/ext/approvals.ts`) for remote approval later.
+Rules for who shows what are editable (*Setup → Advanced*). **By default Overtime never answers anything**: Hermes asks in its own UI and the approval card is read-only. Answering gateway approvals from Overtime is an opt-in on both sides (see *Remote control* below).
 
 **Privacy and security.** *Metadata* sends tool names, file paths, URL hosts, the first words of shell commands (`git push`, `npm run test`), statuses, durations, tokens and cost: no prompts, messages, file contents, full commands or outputs. *Args* and *full* add more, truncated. Anything that looks like a key or token is redacted on your Hermes machine and again by the Worker before storage. The ingest token can only write to its own office; the viewer link (`/watch/<office>#v=…`) is read-only and keeps its token in the URL fragment. Per-office rate limits, 256 KB/200-event request caps and the full event schema are in [docs/EVENTS.md](docs/EVENTS.md).
 
 **Other agents.** Anything can drive an office through the generic events API: `POST /api/ext/runs/<office>/events` with events like `{"type":"tool.start","session":"s1","data":{"name":"web_search"}}`. Schema: [docs/EVENTS.md](docs/EVENTS.md) and [docs/events.schema.json](docs/events.schema.json).
 
 **Tested against a real Hermes.** Hermes Agent 0.19.0 (PyPI) with `openai/gpt-4o-mini` on OpenRouter, the plugin installed with exactly the curl lines above, a small task (plan, write two files, run pytest) against `wrangler dev`: every hook arrived and the office above is that run. The outbound-webhook path was checked by running Hermes' own serialisation and signing code (`agent/outbound_webhooks.py` from `main`) against a local office.
+
+
+## Remote control (opt-in): approve, send tasks, get notified
+
+Off by default. Turn it on per office in **Remote control**, and on the Hermes machine with environment variables; both sides must opt in.
+
+| Approve from the office card | Phone (paired device): bottom sheet |
+|---|---|
+| ![Approval card](docs/control-approval-desktop.png) | <img src="docs/control-phone-approval-mobile.png" width="260" alt="Phone approval"> |
+| **A real Hermes 0.19 run, approved from Overtime** | **Send Hermes a task, with confirmation** |
+| ![Real Hermes approval applied](docs/control-real-hermes-applied-desktop.png) | ![Task confirm](docs/control-task-confirm-desktop.png) |
+| **Settings: what Overtime may do, the Hermes-side lines** | **Telegram, quiet hours, devices, signed audit log** |
+| ![Settings](docs/control-settings-desktop.png) | <img src="docs/control-notify-mobile.png" width="260" alt="Notifications"> |
+
+**Approve or deny from Overtime.** When a Hermes *gateway* session (Telegram, Discord, Slack, the API server…) stops on a dangerous command, the office shows **Approve once / Deny** (and *Approve for the rest of this session*) on desktop and as a bottom sheet on phones. How it works with Hermes 0.19:
+
+1. Hermes' gateway queues the approval, fires the `pre_approval_request` hook and blocks the agent thread until someone answers (`tools/approval.py`).
+2. The plugin registers that request with your office and long-polls for an answer in a background thread (25 s polls, up to Hermes' own `approvals.timeout` minus 5 s, or `OVERTIME_APPROVAL_WAIT`).
+3. A paired device answers. The office signs the decision with HMAC-SHA256 (key: SHA-256 of the office's ingest token) and binds it to the request id and the SHA-256 of the exact command.
+4. The plugin verifies all of that, checks that the approval at the head of Hermes' queue is still this command, and resolves it with `tools.approval.resolve_gateway_approval(session_key, choice)`: the same call behind Hermes' own `/approve`, `/deny` and `POST /v1/runs/{id}/approval`.
+
+Hermes keeps asking in its own UI the whole time; the first answer wins (an answer given in Hermes cancels the remote wait). **On timeout, a network error, a bad signature or anything unexpected the plugin does nothing** and Hermes' normal approval carries on. Overtime never approves on its own, never offers *always* (permanent allowlist entries stay a local decision), and CLI sessions stay in the terminal: the CLI prompt reads stdin and has no remote resolver in 0.19.
+
+**Send tasks to Hermes.** A task box under the panel sends a prompt after a confirmation step. The plugin, running inside `hermes gateway`, long-polls your office's queue, claims one task at a time, checks its signature and a local allowlist (`OVERTIME_REMOTE_COMMANDS`, default `run,stop`; prompts starting with `/` are refused unless `OVERTIME_ALLOW_SLASH=1`), and starts it through **Hermes' own API server**: `POST /v1/runs` (see Hermes' [programmatic integration](https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration)). It reports *started* and *done/failed* back; **Stop** maps to `POST /v1/runs/{id}/stop`. A claimed task that is never confirmed as started is marked *lost* and never re-run. Hermes plugins have no API to inject a prompt into an existing chat, so tasks start a new API-server run (its own session, which the office follows).
+
+**Notifications** when an approval or input is waiting, on an error or failed session, when a working session goes quiet for N minutes (*stuck*, checked by the office's Durable Object alarm), and optionally when a session finishes. Channels:
+- **Telegram** with your own bot (token from @BotFather + your chat id). The token is stored encrypted (AES-GCM, key from `OVERTIME_SECRET_KEY` if set, otherwise a per-office key) and never shown again. Self-hosters can use Worker secrets instead (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, allowed per office with `OVERTIME_TELEGRAM_OFFICES`).
+- **Web Push** (VAPID + aes128gcm, no dependencies; works in Chrome on Android with the tab closed). VAPID keys are generated per office, or set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`. Pushes only go to browser push services.
+
+Per-trigger toggles, quiet hours in your time zone, one message per alert per 10 minutes and at most 12 per hour per channel. Every message links to the office's `/watch` viewer.
+
+**Devices and tokens.** The first device is paired with the office's ingest token while no device is paired (the owner's tab); after that only a paired device can pair another, with a one-time **pairing link** (`/watch/<office>#v=…&c=ot_ctl_…`; the token leaves the address bar as soon as the page opens). Each device has its own **control token**, stored as a hash, revocable. The viewer link can never approve or send anything; the ingest token on the Hermes machine can only *read* decisions and tasks.
+
+**Audit log.** Every control action (pairing, policy changes, approvals requested/answered/applied/timed out, tasks queued/claimed/started/finished) is appended to a SHA-256 hash chain signed with the office's ECDSA P-256 key, with who (device name) and when. The settings screen verifies the whole chain in your browser.
+
+**Turn it on.** In the office: **Remote control → Turn on remote control**, then tick what Overtime may do. On the Hermes machine:
+
+```bash
+curl -fsSL https://<your-overtime>/hermes-overtime/overtime_control.py -o ~/.hermes/plugins/hermes-overtime/overtime_control.py
+cat >> ~/.hermes/.env <<'EOF'
+OVERTIME_REMOTE_APPROVAL=1      # answer gateway approvals from Overtime
+OVERTIME_REMOTE_TASKS=1         # accept tasks from Overtime
+API_SERVER_ENABLED=true         # Hermes' API server: tasks start with POST /v1/runs
+API_SERVER_KEY=<a long random key>
+EOF
+hermes gateway run              # or restart your gateway service; `hermes overtime bridge` runs the task bridge on its own
+```
+
+| Hermes-side variable | |
+|---|---|
+| `OVERTIME_REMOTE_APPROVAL`, `OVERTIME_REMOTE_TASKS` | `1` to opt in (default off; without them the plugin stays observer-only and the control module is not even loaded) |
+| `OVERTIME_APPROVAL_WAIT` | Seconds to wait for Overtime before leaving it to Hermes (default: Hermes' `approvals.timeout` − 5 s, at most 900) |
+| `OVERTIME_REMOTE_COMMANDS` | Allowed task kinds, default `run,stop` |
+| `OVERTIME_ALLOW_SLASH`, `OVERTIME_TASK_MAX_CHARS` | Allow prompts starting with `/` (default no); longest prompt (default 4000) |
+| `OVERTIME_HERMES_API` | API server base URL (default `http://127.0.0.1:$API_SERVER_PORT`, port 8642) |
+
+Enabling remote approval sends the approval's command text (already redacted by Hermes) to your office whatever the privacy level, since you cannot approve what you cannot see.
+
+**Tested against a real Hermes.** Hermes Agent 0.19.0 from PyPI (`hermes gateway run` with the API server, `openai/gpt-4o-mini` on OpenRouter, about $0.002 in total) against `wrangler dev`, with the plugin installed by the curl lines above: a task sent from Overtime started a run through `POST /v1/runs`; Hermes stopped on `rm -rf ./overtime-demo-cache` (recursive delete); the approval appeared in the office; **Approve once** in the browser was applied inside Hermes, the command ran and the task was reported done. A second run with `OVERTIME_APPROVAL_WAIT=20` and no answer timed out in Overtime, the command did not run, and Hermes' own `POST /v1/runs/{id}/approval` (deny) settled it. The pytest suite also drives Hermes' real `tools.approval._await_gateway_decision` when hermes-agent is importable.
+
+**Limits.** Remote approval covers gateway sessions only (CLI prompts read the terminal). Tasks need Hermes' API server and start a new run rather than continuing a chat. Approving from inside the Telegram message itself is not built (the message links to the office). Web Push was tested with the RFC 8291 test vector, a VAPID signature check and mocked push services, not on a physical Android phone. Hermes builds newer than 0.19.0 add an official approval-transport API (`ctx.register_approval_transport`); an adapter for it is on the roadmap.
 
 ---
 
@@ -148,7 +209,8 @@ Other scripts:
 | `npm run build` | Type-checks, then builds the app into `dist/` (served by the Worker's static assets) |
 | `npm run dev:worker` | Serves `dist/` and the Worker together on :8787, the same way production does |
 | `npm test` | Vitest unit tests: external-agent schema, redaction, Hermes payload mapping, HMAC verification, token auth, rate and size limits, the office Durable Object on real SQLite, the office reducer (roles, subagents, approvals, cost, sessions; a captured real Hermes run and the recorded demo); orchestrator (both modes), tool calls, checks, budget cap, approvals, injection safety, mocked GitHub (tree, patches, branch, commit, PR, error paths, token redaction), mocked LLM (JSON repair, tool calling fallback, 429 backoff, streaming), the smoke script |
-| `npm run test:plugin` | pytest for the Hermes plugin: observer-only registration, privacy trimming, batching, timeouts, failure isolation |
+| `npm run test:plugin` | pytest for the Hermes plugin: observer-only registration, privacy trimming, batching, timeouts, failure isolation; remote control (signature checks, timeout/error fallback, local answer first, task allowlist, API-server calls) |
+| `npm run test:e2e:control` | Playwright for remote control on its own port (:8931) with a mock Telegram API on :8932 (`playwright.control.config.ts`) |
 | `npm run test:e2e` | Playwright at 390×844 and 1440×900 (Connect Hermes flow, live events, watch view, the demos, 0 console errors). Run `npm run build` and `npm run build:preview` first |
 | `npm run build:preview` | Builds `preview.html` (all demos, fully offline) and prints its sha256 |
 | `npm run live:smoke` | A real end-to-end run from the terminal against your provider (and, optionally, your repo). See *Live smoke test* |
@@ -251,6 +313,7 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 | `POST /api/ext/hermes/webhook/:id` | Hermes outbound webhooks, HMAC-SHA256 (`X-Hermes-Signature-256`), 5-minute replay window, delivery dedupe |
 | `GET /api/ext/runs/:id/events` · `/stream` | Replay for late viewers · live WebSocket (hibernatable). View or ingest token |
 | `GET /hermes-overtime/*` | The plugin files, served by your own deployment for the Connect screen's curl lines |
+| `/api/ext/runs/:id/control/*` | Remote control (opt-in): pairing and devices, policy, approvals (the plugin registers and long-polls with the ingest token; paired devices decide), the task queue (claim/ack), notifications, push subscriptions, the signed audit log. See [docs/EVENTS.md](docs/EVENTS.md#remote-control-opt-in) |
 
 **Why a custom canvas renderer instead of Phaser or Pixi?** The office is one pre-rendered isometric room with a handful of sprites, glows and rain. A ~600-line renderer covers that, keeps the bundle around 260 KB and makes the single-file classic-script preview possible. Bundled game engines don't survive that preview's constraints.
 
@@ -269,7 +332,7 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 - **Secrets.** API keys and GitHub tokens are never stored by the Worker; the proxies forward them in flight only (`Authorization` for the LLM, `x-ot-gh-token` → `Authorization` for GitHub). Nothing logs request bodies or headers. Worker errors never echo request data.
 - **App CSP** (`public/_headers`): `default-src 'self'`, no inline scripts, `frame-ancestors 'none'`. It includes `'unsafe-eval'` for one reason: the Reviewer's JS syntax check *compiles* generated code with `new Function` and never calls it. Without eval, it falls back to a bracket/string/comment balance check.
 - **SSRF.** The proxy and the fetcher refuse loopback, private, link-local and metadata hosts. Local LLMs need the explicit `ALLOW_LOCAL_LLM=1` dev flag.
-- **External-agent offices.** Ingest and view tokens are random 24-byte values stored as SHA-256 hashes and compared in constant time; they open one office only. Hermes webhooks need a valid HMAC over the raw body and a fresh signed timestamp; repeated deliveries are dropped. Requests are capped at 256 KB and 200 events, offices are rate-limited, strings are clipped, secrets are redacted before storage, and the UI treats every payload as text (escaped). The Hermes plugin registers observer hooks only and cannot change what Hermes does; Overtime never answers approvals.
+- **External-agent offices.** Ingest and view tokens are random 24-byte values stored as SHA-256 hashes and compared in constant time; they open one office only. Hermes webhooks need a valid HMAC over the raw body and a fresh signed timestamp; repeated deliveries are dropped. Requests are capped at 256 KB and 200 events, offices are rate-limited, strings are clipped, secrets are redacted before storage, and the UI treats every payload as text (escaped). The Hermes plugin registers observer hooks only and cannot change what Hermes does. Remote control is a separate opt-in module on both sides: per-device control tokens (hashed, revocable; the view token never controls), HMAC-signed decisions bound to the request and the command hash, no auto-approval and no remote "always", fallback to Hermes' own approval on any timeout or error, a signed audit log, the Telegram token encrypted at rest, and Web Push only to browser push services.
 
 ## Roadmap
 
@@ -279,7 +342,7 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 - Headless-browser checks (Lighthouse-style performance, real rendered contrast, screenshot diffs)
 - Agents that can ask each other questions, plus a "standup" summary at the meeting table
 - Day/night cycle, more office layouts, unlockable decor as runs complete
-- Remote approvals for Hermes through its approval-transport API (the read-only `ApprovalTransport` seam is in place), streaming Hermes' replies into speech bubbles
+- An approval-transport adapter for Hermes builds newer than 0.19.0 (`ctx.register_approval_transport`, which would also cover CLI sessions), Approve/Deny buttons inside the Telegram message, streaming Hermes' replies into speech bubbles
 - Adapters for more agents on the generic events API (Claude Code hooks, OpenAI Agents SDK tracing)
 - Shareable read-only replays of built-in team runs (external-agent offices already have them)
 
