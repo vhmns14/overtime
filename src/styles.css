@@ -148,6 +148,7 @@ button { cursor: pointer; }
 .approval .comment input { flex: 1; min-width: 0; padding: 7px 9px; border: 1.5px solid var(--ink); border-radius: 5px; background: #fff; font-size: 13.5px; }
 .approval .more { margin-top: 8px; display: flex; justify-content: flex-end; font-size: 12.5px; }
 .diff { margin: 0 0 12px; padding: 9px 10px; border-radius: 5px; background: var(--paper-2); font: 12px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
+.diff span { display: block; overflow: hidden; text-overflow: ellipsis; }
 .diff .add { color: #1f6a1a; }
 .diff .del { color: #a3311a; }
 .result h3 { margin: 0 0 4px; font-size: 16px; }
@@ -211,7 +212,7 @@ button { cursor: pointer; }
 .history .meta { font: 12px/1.3 var(--mono); color: var(--muted); }
 
 .sheet-modal { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 20px; background: var(--paper); }
-.ma-card { width: min(100%, 360px); padding: 24px 18px 20px; background: var(--card); border-radius: 10px; box-shadow: 0 10px 30px rgba(60, 40, 20, .18); text-align: center; }
+.ma-card { width: 100%; max-width: 360px; min-width: 0; padding: 24px 18px 20px; background: var(--card); border-radius: 10px; box-shadow: 0 10px 30px rgba(60, 40, 20, .18); text-align: center; }
 .ma-card img { width: 92px; height: 92px; image-rendering: pixelated; border-radius: 8px; background: var(--paper-2); }
 .ma-card h2 { margin: 16px 0 14px; text-align: left; font: 500 17px/1.38 var(--mono); }
 .ma-card h2 b { font-weight: 700; }
@@ -221,6 +222,7 @@ button { cursor: pointer; }
 .ma-card .actions .btn { min-height: 46px; font: 500 18px var(--mono); }
 .ma-card .so-far { margin: 16px 0 0; font: 500 16px var(--mono); }
 .ma-card .so-far b { font-weight: 700; }
+.ma-cancel { margin-top: 10px; font-size: 12.5px; }
 .ma-card .comment { display: flex; gap: 6px; margin-top: 12px; }
 .ma-card .comment input { flex: 1; min-width: 0; padding: 9px; border: 1.5px solid var(--ink); border-radius: 6px; font-size: 14px; }
 
@@ -258,6 +260,10 @@ button { cursor: pointer; }
   .files-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .tree { max-height: 150px; border-right: 0; border-bottom: 2px solid var(--ink); }
   .agent-card { left: 10px; bottom: 26px; }
+  .ov-head { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .ov-head h2 { display: none; }
+  .ov-head .btn-sm { white-space: nowrap; padding: 4px 8px; font-size: 12.5px; }
+  .ov-head .tab { padding: 5px 10px; font-size: 12.5px; }
   .app.is-running .task { display: none; }
 }
 @media (min-width: 761px) {

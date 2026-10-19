@@ -125,8 +125,8 @@ export class Office {
     let cx = ROOM.x + ROOM.w / 2, cy = ROOM.y + ROOM.h / 2;
     if (W < 680 || W / Math.max(1, H) < 0.9) {
       // narrow (phone): zoom into the desk cluster like the mobile mockup
-      s = Math.max(s, Math.min(H / 520, W / 560));
-      cx = 560; cy = 500;
+      s = Math.max(s, Math.min(H / 600, W / 680));
+      cx = 570; cy = 470;
     }
     let ox = W / 2 - cx * s, oy = H / 2 - cy * s;
     if (BG.w * s > W) ox = Math.max(W - BG.w * s, Math.min(0, ox));

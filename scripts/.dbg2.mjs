@@ -1,0 +1,15 @@
+import { chromium } from "@playwright/test";
+process.env.LD_LIBRARY_PATH = "/workspace/work/.pw-libs";
+const browser = await chromium.launch({ executablePath: "/workspace/work/.pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell" });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+page.on("console", (m) => console.log("console:", m.type(), m.text()));
+page.on("pageerror", (e) => console.log("pageerror", String(e)));
+await page.goto("http://127.0.0.1:8787/");
+await page.waitForTimeout(800);
+await page.click('.panel-nav [data-open="settings"]');
+await page.click('[data-mode="live"]');
+console.log(await page.evaluate(() => [...document.querySelectorAll("[data-mode]")].map(b => b.getAttribute("aria-pressed")).join()));
+await page.locator("#settings-form").evaluate((f) => f.requestSubmit());
+await page.waitForTimeout(500);
+console.log(await page.textContent("#task-mode"), await page.evaluate(() => document.getElementById("settings").hidden));
+await browser.close();

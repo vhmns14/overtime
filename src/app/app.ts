@@ -147,7 +147,10 @@ export class App {
   private onEvent(e: RunEvent) {
     const o = this.orch!;
     switch (e.type) {
-      case "status": this.renderChrome(); break;
+      case "status":
+        if (["done", "failed", "cancelled", "budget"].includes(e.status)) { this.hideGate(); this.office.clearWaiting(); }
+        this.renderChrome();
+        break;
       case "log": this.renderLog(o.log); break;
       case "agent": {
         const st = e.state;
@@ -262,7 +265,7 @@ export class App {
     m.innerHTML = `<div class="ma-card"><img alt="${ROLE_INFO[g.agent].name}" src="${this.portraits[g.agent]}"><h2 id="ma-title">${this.titleHTML(g)}</h2>${body}${this.diffHTML(g.diff) || (g.items?.length ? `<ul>${g.items.slice(0, 5).map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "")}
       <div class="actions"><button class="btn btn-primary" data-act="approve">Approve</button><button class="btn" data-act="reject">Reject</button></div>
       <div class="comment"><input aria-label="Comment for the agent" placeholder="Optional comment…" maxlength="1000"><button class="btn btn-sm" data-act="comment">Send</button></div>
-      <p class="so-far"><b>$${(this.orch?.usage.usd ?? 0).toFixed(2)}</b> so far</p></div>`;
+      <p class="so-far"><b>$${(this.orch?.usage.usd ?? 0).toFixed(2)}</b> so far</p><button class="link-btn ma-cancel" data-act="cancel-run">Cancel run</button></div>`;
     m.hidden = false;
     this.bindGate(m, g);
   }
@@ -272,6 +275,7 @@ export class App {
       const input = root.querySelector<HTMLInputElement>(".comment input");
       const comment = input?.value.trim() || undefined;
       const act = b.dataset.act!;
+      if (act === "cancel-run") { this.orch?.cancel(); return; }
       if (act === "toggle-comment") { const c = root.querySelector<HTMLElement>(".comment")!; c.hidden = !c.hidden; if (!c.hidden) input?.focus(); return; }
       if (act === "comment" && !comment) { input?.focus(); return; }
       this.orch?.decide(g.id, { action: act as "approve" | "reject" | "comment", comment });
@@ -416,7 +420,7 @@ export class App {
     const s = this.s;
     const el = $("#settings");
     const key = secrets.apiKey(s);
-    el.innerHTML = this.head("Settings") + `<form class="settings" id="settings-form">
+    el.innerHTML = this.head("Settings") + `<form class="settings" id="settings-form" novalidate>
       <div class="field"><span>Mode</span><div class="seg" role="group" aria-label="Mode"><button type="button" data-mode="demo" aria-pressed="${s.mode === "demo"}">Demo</button><button type="button" data-mode="live" aria-pressed="${s.mode === "live"}">Live (your key)</button></div>
         <small>Demo replays a recorded Kopi Senja run through the real engine. Live runs your own task on your own model.</small></div>
       <h3>Model</h3>
@@ -427,8 +431,8 @@ export class App {
       <label class="check"><input type="checkbox" name="rememberKey" ${s.rememberKey ? "checked" : ""}> Remember the key on this device</label>
       <label class="field"><span>Route</span><select name="route"><option value="proxy" ${s.route === "proxy" ? "selected" : ""}>Through the Worker proxy (no CORS issues)</option><option value="direct" ${s.route === "direct" ? "selected" : ""}>Direct from the browser (provider must allow CORS)</option></select></label>
       <label class="check"><input type="checkbox" name="jsonMode" ${s.jsonMode ? "checked" : ""}> Ask for JSON mode (auto-off if the provider refuses)</label>
-      <div class="row2"><label class="field"><span>$ / 1M input tokens</span><input name="priceIn" type="number" step="0.01" min="0" value="${s.priceIn}"></label><label class="field"><span>$ / 1M output tokens</span><input name="priceOut" type="number" step="0.01" min="0" value="${s.priceOut}"></label></div>
-      <label class="field"><span>Budget cap per run (USD)</span><input name="budgetUsd" type="number" step="0.05" min="0.01" value="${s.budgetUsd}"><small>The run stops before it spends more than this.</small></label>
+      <div class="row2"><label class="field"><span>$ / 1M input tokens</span><input name="priceIn" type="number" step="any" min="0" value="${s.priceIn}"></label><label class="field"><span>$ / 1M output tokens</span><input name="priceOut" type="number" step="any" min="0" value="${s.priceOut}"></label></div>
+      <label class="field"><span>Budget cap per run (USD)</span><input name="budgetUsd" type="number" step="any" min="0.01" value="${s.budgetUsd}"><small>The run stops before it spends more than this.</small></label>
       <h3>Approval gates</h3>
       <label class="check"><input type="checkbox" name="g_plan" ${s.gates.plan ? "checked" : ""}> Approve the PM's plan</label>
       <label class="check"><input type="checkbox" name="g_review" ${s.gates.review ? "checked" : ""}> Ask me when the Reviewer finds failures</label>
