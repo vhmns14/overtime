@@ -71,4 +71,15 @@ Severity scale: **High** means an attacker gets a capability they should not hav
 
 ## Test totals at the end of the audit
 
-See the report accompanying this commit: vitest, plugin pytest (with real hermes-agent 0.19.0), Playwright main and remote-control configs, `scripts/selfhost-smoke.mjs`, and typecheck.
+All green, with 0 console errors (every e2e spec asserts it). The one expected exception is the 410 for the deliberately reused pairing link, which that test filters.
+
+| Suite | Result |
+|---|---|
+| `npx vitest run` | 315 passed (24 files; 272 at baseline) |
+| `npm run test:plugin` (uv, no Hermes installed) | 94 passed, 2 skipped (the real-Hermes tests; 58 + 1 skipped at baseline) |
+| plugin tests with hermes-agent 0.19.0 importable | 96 passed |
+| Playwright main config (`OT_PORT=8911`, mobile-390 + desktop-1440) | 50 passed, 10 skipped (project-specific: phone-only or desktop-only tests) |
+| Playwright remote-control config | 10 passed |
+| `node scripts/selfhost-smoke.mjs` | 15/15 checks ok (includes PUBLIC_URL via the env file, no secret in `ps`, SHA256SUMS served) |
+| `npm run typecheck` | clean |
+| `preview.html` | rebuilt: one inline classic `<script>`, no `import`/`export`, no "module" |
