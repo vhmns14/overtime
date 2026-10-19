@@ -50,9 +50,16 @@ export interface Hunk {
   lines: DiffLine[];
 }
 
+/** Line diff for files: a final newline is not a line of its own, and an empty side has no lines. */
+export function fileDiff(a: string, b: string): DiffLine[] {
+  const strip = (s: string) => (s.endsWith("\n") ? s.slice(0, -1) : s);
+  const out = lineDiff(strip(a), strip(b));
+  return out.filter((l) => !((l.type === "del" && a === "" && l.text === "") || (l.type === "add" && b === "" && l.text === "")));
+}
+
 /** Unified-diff hunks (git style, `context` lines around each change). */
 export function hunks(a: string, b: string, context = 3): Hunk[] {
-  const lines = lineDiff(a, b);
+  const lines = fileDiff(a, b);
   const out: Hunk[] = [];
   // line numbers before each diff line
   let o = 1, n = 1;

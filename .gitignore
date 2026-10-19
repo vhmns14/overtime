@@ -7,3 +7,4 @@ playwright-report
 .dev.vars
 *.log
 shots/
+smoke-out/

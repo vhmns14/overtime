@@ -119,6 +119,9 @@ export class Orchestrator {
     this.emit({ type: "cost", tokens: this.usage.tokens, usd: this.usage.usd, byAgent });
   }
 
+  /** a system line in the log (e.g. retry notices from the model client) */
+  notice(text: string, level: LogEntry["level"] = "info") { this.say("system", text, level); }
+
   // ---------- control ----------
   cancel() {
     if (["done", "failed", "cancelled", "budget"].includes(this.status)) return;

@@ -47,6 +47,8 @@ export class Office {
   private view = { s: 1, ox: 0, oy: 0, w: 0, h: 0, dpr: 1 };
   private drops: { u: number; v: number; l: number; sp: number }[] = [];
   private tickets: Ticket[] = [];
+  private prNote: string | null = null;
+  private celebrateUntil: Partial<Record<Role, number>> = {};
   private raf = 0;
   private last = 0;
   private flashUntil = 0;
@@ -293,8 +295,29 @@ export class Office {
 
   setTickets(tickets: Ticket[]) { this.tickets = tickets; }
 
+  /** An orange sticky with the PR number on the whiteboard. */
+  setPrNote(text: string | null) { this.prNote = text; }
+
+  /** Ops walks to the whiteboard, pins the PR sticky and hops for joy. */
+  async celebrate(role: Role, note: string, line: string) {
+    const a = this.actors[role];
+    a.busy = true;
+    a.working = false;
+    const arrived = await this.go(role, SPOTS.board);
+    if (arrived) { a.mode = "stand"; a.look = "front"; a.flip = false; }
+    this.prNote = note;
+    this.celebrateUntil[role] = performance.now() + 2600 * Math.max(0.5, this.speed);
+    for (const r of ROLES) if (r !== role) this.celebrateUntil[r] = performance.now() + 1400 * Math.max(0.5, this.speed);
+    this.say(role, line, "talk", 3600);
+    await this.wait(2600);
+    a.busy = false;
+    void this.sit(role);
+  }
+
   reset() {
     this.tickets = [];
+    this.prNote = null;
+    this.celebrateUntil = {};
     for (const r of ROLES) {
       const a = this.actors[r];
       a.working = false; a.waiting = false; a.busy = false; a.bubble = undefined;
@@ -314,6 +337,7 @@ export class Office {
     ctx.drawImage(this.bg, 0, 0);
     this.drawRain(t);
     this.drawTickets();
+    this.drawPrNote();
 
     // light
     ctx.globalCompositeOperation = "lighter";
@@ -352,7 +376,9 @@ export class Office {
       }
       ctx.save();
       if (fr.clipY !== undefined) { ctx.beginPath(); ctx.rect(a.x - 80, a.y - 200, 160, 200 - (a.y - fr.clipY)); ctx.clip(); }
-      const dx = Math.round(a.x - f.w / 2), dy = Math.round(a.y - f.h);
+      const until = this.celebrateUntil[a.role] ?? 0;
+      const hop = t < until ? Math.abs(Math.sin(t / 140)) * 9 : 0;
+      const dx = Math.round(a.x - f.w / 2), dy = Math.round(a.y - f.h - hop);
       if (fr.flip) {
         ctx.translate(dx + f.w, dy);
         ctx.scale(-1, 1);
@@ -397,6 +423,31 @@ export class Office {
     c.stroke();
     c.restore();
     void t;
+  }
+
+  private drawPrNote() {
+    if (!this.prNote) return;
+    const c = this.ctx;
+    const u0 = 0.56, v0 = 0.6, du = 0.36, dv = 0.3;
+    const p = [quad(BOARD, u0, v0), quad(BOARD, u0 + du, v0), quad(BOARD, u0 + du, v0 + dv), quad(BOARD, u0, v0 + dv)];
+    c.fillStyle = "#e8742f";
+    c.strokeStyle = "#2a1c14";
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(p[0].x, p[0].y);
+    p.slice(1).forEach((q) => c.lineTo(q.x, q.y));
+    c.closePath();
+    c.fill();
+    c.stroke();
+    // text along the board's slant
+    const a = quad(BOARD, u0 + 0.03, v0 + dv * 0.62), b = quad(BOARD, u0 + du, v0 + dv * 0.62);
+    c.save();
+    c.translate(a.x, a.y);
+    c.rotate(Math.atan2(b.y - a.y, b.x - a.x));
+    c.fillStyle = "#1b0f06";
+    c.font = "700 11px monospace";
+    c.fillText(this.prNote.slice(0, 10), 0, 0);
+    c.restore();
   }
 
   private drawTickets() {

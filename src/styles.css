@@ -278,3 +278,33 @@ button { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ---------- repo mode ---------- */
+.task-target { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.task-target select { padding: 6px 9px; border: 1.5px solid var(--ink); border-radius: 5px; background: var(--card); font-size: 13.5px; font-weight: 600; max-width: 100%; }
+.repo-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 5px 10px; border: 1.5px dashed var(--ink); border-radius: 99px; background: transparent; font: 500 12.5px/1.2 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-chip[data-state="ready"] { border-style: solid; background: var(--card); }
+.repo-chip[data-state="ready"]::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
+.repo-chip:disabled { opacity: .7; cursor: default; }
+.gh { padding: 16px 18px 22px; display: grid; gap: 14px; }
+.gh h3 { margin: 6px 0 0; font: 700 13px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.gh p, .gh li { font-size: 13.5px; color: var(--ink-2); margin: 0; }
+.gh ul.scopes { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.gh .who { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--card); border: 2px solid var(--ink); border-radius: var(--r); font-size: 14px; }
+.gh .who .spacer { flex: 1; }
+.gh .err { padding: 10px 12px; border: 2px solid var(--bad); border-radius: var(--r); background: #fbe9e3; color: #5d1b0b; font-size: 13.5px; }
+.gh .repo-list { display: grid; gap: 6px; max-height: 300px; overflow: auto; padding: 2px; }
+.gh .repo-list button { display: grid; gap: 2px; text-align: left; padding: 9px 11px; background: var(--card); border: 1.5px solid var(--line); border-radius: 6px; }
+.gh .repo-list button[aria-pressed="true"] { border: 2px solid var(--ink); background: #fff7ee; }
+.gh .repo-list b { font: 600 13.5px/1.3 var(--mono); }
+.gh .repo-list span { font-size: 12px; color: var(--muted); }
+.conn-result { font: 500 12.5px/1.4 var(--mono); }
+.conn-result.ok { color: var(--good); }
+.conn-result.bad { color: var(--bad); }
+.tree .st { display: inline-block; width: 16px; font-weight: 700; }
+.tree .st-added { color: var(--good); }
+.tree .st-modified { color: #9a5a12; }
+.tree .st-deleted { color: var(--bad); }
+.code .ln.hunk { color: #6a4fb3; background: #f1edf9; }
+.code .ln.meta { color: var(--muted); font-weight: 700; }
+.result .pr-line { font: 500 13px/1.4 var(--mono); color: var(--ink); word-break: break-all; }

@@ -57,7 +57,7 @@ export function riskFlags(changes: FileChange[], o: RepoCheckOptions = {}): Risk
     if (c.after && SECRET_TEXT.test(c.after) && !(c.before && SECRET_TEXT.test(c.before))) out.push({ id: "secret-text", path: c.path, reason: "added text that looks like a token or private key" });
     if (isLockfile(c.path) && c.added + c.removed > maxLock) out.push({ id: "lockfile", path: c.path, reason: `mass lockfile edit (${c.added + c.removed} lines)` });
     if (c.status === "deleted") out.push({ id: "delete", path: c.path, reason: "deletes the file" });
-    else if (c.removed > maxDel) out.push({ id: "big-delete", path: c.path, reason: `deletes ${c.removed} lines` });
+    else if (c.removed > maxDel && !isLockfile(c.path)) out.push({ id: "big-delete", path: c.path, reason: `deletes ${c.removed} lines` });
   }
   return out;
 }

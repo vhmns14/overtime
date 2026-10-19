@@ -3,9 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Overtime: watch a team of AI agents build your website in a pixel-art office, and approve the steps that matter.",
+  "description": "Overtime: watch a team of AI agents build a website or fix your repo in a pixel-art office, approve the steps that matter, get a live preview or a pull request.",
   "license": "MIT",
-  "author": "vhmns · Kode Kecil",
+  "author": "vhmns \u00b7 Kode Kecil",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:ui": "vite",
@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p worker/tsconfig.json",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "live:smoke": "vite-node scripts/live-smoke.ts"
   },
   "dependencies": {
     "parse5": "^7.3.0"

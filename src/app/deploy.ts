@@ -1,5 +1,5 @@
-// Ops' side effects: publish a preview to the Worker, fall back to an in-browser preview, push to
-// GitHub with the user's token (browser → api.github.com directly; the token never touches our Worker).
+// Ops' side effects in site mode: publish a preview to the Worker, or fall back to an in-browser preview.
+// (GitHub work lives in engine/github.ts: repo mode opens a pull request, it never pushes to a branch.)
 
 export async function deployToWorker(runId: string, task: string, files: Record<string, string>): Promise<{ url: string; local: boolean }> {
   if (__PREVIEW__) return { url: "", local: true }; // single-file preview: no network at all
@@ -53,37 +53,6 @@ export function inlinePreview(files: Record<string, string>, entry = "index.html
   });
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; form-action 'none'">`;
   return /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (h) => `${h}${csp}`) : csp + html;
-}
-
-export interface GitHubTarget { repo: string; branch: string; token: string }
-
-export async function pushToGitHub(t: GitHubTarget, files: Record<string, string>, message: string): Promise<{ url: string }> {
-  if (!/^[\w.-]+\/[\w.-]+$/.test(t.repo)) throw new Error("repo must look like owner/name");
-  const api = `https://api.github.com/repos/${t.repo}`;
-  const h = { authorization: `Bearer ${t.token}`, accept: "application/vnd.github+json", "content-type": "application/json", "x-github-api-version": "2022-11-28" };
-  const call = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-    const r = await fetch(api + path, { ...init, headers: h });
-    if (!r.ok) throw new Error(`GitHub ${r.status} on ${path.split("/").slice(0, 3).join("/")}`);
-    return (await r.json()) as T;
-  };
-  let parent: string;
-  let created = false;
-  try {
-    parent = (await call<{ object: { sha: string } }>(`/git/ref/heads/${encodeURIComponent(t.branch)}`)).object.sha;
-  } catch {
-    const repo = await call<{ default_branch: string }>("");
-    parent = (await call<{ object: { sha: string } }>(`/git/ref/heads/${encodeURIComponent(repo.default_branch)}`)).object.sha;
-    created = true;
-  }
-  const commit = await call<{ tree: { sha: string } }>(`/git/commits/${parent}`);
-  const tree = await call<{ sha: string }>("/git/trees", {
-    method: "POST",
-    body: JSON.stringify({ base_tree: commit.tree.sha, tree: Object.entries(files).map(([path, content]) => ({ path, mode: "100644", type: "blob", content })) }),
-  });
-  const next = await call<{ sha: string }>("/git/commits", { method: "POST", body: JSON.stringify({ message, tree: tree.sha, parents: [parent] }) });
-  if (created) await call("/git/refs", { method: "POST", body: JSON.stringify({ ref: `refs/heads/${t.branch}`, sha: next.sha }) });
-  else await call(`/git/refs/heads/${encodeURIComponent(t.branch)}`, { method: "PATCH", body: JSON.stringify({ sha: next.sha }) });
-  return { url: `https://github.com/${t.repo}/tree/${encodeURIComponent(t.branch)}` };
 }
 
 export { esc };

@@ -84,6 +84,7 @@ describe("diff, zip, llm client", () => {
   it("redact + cost", () => {
     expect(redact("Bearer abc.def gsk_ABCDEFGHIJKLMNOP")).toBe("Bearer [redacted] [redacted]");
     expect(costOf({ prompt: 1_000_000, completion: 1_000_000 }, { input: 1, output: 2 })).toBe(3);
-    expect(PRESETS.map((p) => p.id)).toEqual(["openai", "openrouter", "groq", "ollama"]);
+    expect(PRESETS.map((p) => p.id)).toEqual(["openrouter", "groq", "openai", "ollama"]);
+    expect(PRESETS[0].freeModel).toBe("openrouter/free");
   });
 });

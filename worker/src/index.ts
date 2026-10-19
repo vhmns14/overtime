@@ -11,7 +11,7 @@ export interface Env {
 }
 
 import { DurableObject } from "cloudflare:workers";
-import { RUN_ID, MAX_FILES, MAX_TOTAL, PREVIEW_CSP, TYPES, safePath, isPrivateHost, json, CORS, htmlToText } from "./lib";
+import { RUN_ID, MAX_FILES, MAX_TOTAL, PREVIEW_CSP, TYPES, safePath, isPrivateHost, json, CORS, htmlToText, ghRouteAllowed, ghBodyAllowed } from "./lib";
 
 async function proxyLLM(req: Request, env: Env): Promise<Response> {
   const base = req.headers.get("x-ot-base-url") ?? "";
@@ -31,6 +31,43 @@ async function proxyLLM(req: Request, env: Env): Promise<Response> {
   if (u.hostname.endsWith("openrouter.ai")) { headers["http-referer"] = "https://github.com/vhmns14/overtime"; headers["x-title"] = "Overtime"; }
   const upstream = await fetch(u.toString().replace(/\/+$/, "") + "/chat/completions", { method: "POST", headers, body });
   return new Response(upstream.body, { status: upstream.status, headers: { "content-type": upstream.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...CORS } });
+}
+
+/**
+ * Stateless GitHub API proxy. The token arrives in x-ot-gh-token on each request, is forwarded as
+ * Authorization to api.github.com and dropped. It is never stored and nothing here logs it.
+ */
+async function proxyGitHub(req: Request, url: URL): Promise<Response> {
+  const path = url.pathname.slice("/api/gh".length) || "/";
+  const method = req.method.toUpperCase();
+  if (!ghRouteAllowed(method, path)) return json({ message: `Overtime's GitHub proxy does not forward ${method} ${path.split("/").slice(0, 2).join("/")}…` }, 403, CORS);
+  const token = req.headers.get("x-ot-gh-token") ?? "";
+  if (!token) return json({ message: "missing GitHub token" }, 401, CORS);
+  if (!/^[\w-]{20,255}$/.test(token)) return json({ message: "malformed GitHub token" }, 401, CORS);
+  let body: string | undefined;
+  if (method === "POST") {
+    body = await req.text();
+    if (body.length > 8_000_000) return json({ message: "request too large" }, 413, CORS);
+    const bad = ghBodyAllowed(path, body);
+    if (bad) return json({ message: bad }, 403, CORS);
+  }
+  const upstream = await fetch(`https://api.github.com${path}${url.search}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/vnd.github+json",
+      "x-github-api-version": "2022-11-28",
+      "user-agent": "Overtime (+https://github.com/vhmns14/overtime)",
+      ...(body !== undefined ? { "content-type": "application/json" } : {}),
+    },
+    body,
+  });
+  const headers: Record<string, string> = { "content-type": upstream.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...CORS };
+  for (const h of ["x-ratelimit-remaining", "x-ratelimit-reset", "retry-after", "link"]) {
+    const v = upstream.headers.get(h);
+    if (v) headers[h] = v;
+  }
+  return new Response(upstream.body, { status: upstream.status, headers });
 }
 
 async function fetchPage(url: string): Promise<Response> {
@@ -73,6 +110,7 @@ export default {
     try {
       if (path === "/api/health") return json({ ok: true, service: "overtime", previews: true });
       if (path === "/api/llm" && req.method === "POST") return await proxyLLM(req, env);
+      if (path.startsWith("/api/gh/")) return await proxyGitHub(req, url);
       if (path === "/api/fetch" && req.method === "GET") return await fetchPage(url.searchParams.get("url") ?? "");
       const run = path.match(/^\/api\/runs\/([^/]+)$/);
       if (run) {

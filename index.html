@@ -28,7 +28,12 @@
       <h2 class="run-title" id="run-title"></h2>
       <div class="task" id="task-form">
         <label class="sr-only" for="task">Task</label>
-        <textarea id="task" rows="2" maxlength="600" spellcheck="false"></textarea>
+        <div class="task-target" id="task-target">
+          <label class="sr-only" for="task-kind">What the team works on</label>
+          <select id="task-kind"></select>
+          <button type="button" class="repo-chip" id="repo-btn" hidden></button>
+        </div>
+        <textarea id="task" rows="2" maxlength="1200" spellcheck="false"></textarea>
         <div class="task-notes" id="notes-wrap" hidden>
           <label for="notes">Brief notes <span>(optional)</span></label>
           <textarea id="notes" rows="3" maxlength="4000" placeholder="Audience, sections, colours, copy you already have…"></textarea>
@@ -69,6 +74,7 @@
   <div class="overlay" id="files" hidden role="dialog" aria-modal="true" aria-label="Files and preview"></div>
   <div class="overlay overlay-narrow" id="settings" hidden role="dialog" aria-modal="true" aria-label="Settings"></div>
   <div class="overlay overlay-narrow" id="history" hidden role="dialog" aria-modal="true" aria-label="Run history"></div>
+  <div class="overlay overlay-narrow" id="github" hidden role="dialog" aria-modal="true" aria-label="Connect GitHub"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

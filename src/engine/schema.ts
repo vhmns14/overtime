@@ -187,7 +187,9 @@ export type ParseResult = { ok: true; call: ToolCall } | { ok: false; error: str
 
 export function parseToolCall(text: string, role: Role, mode: TaskMode = "site"): ParseResult {
   const allowed = toolsFor(role, mode);
-  const raw = extractJsonObject(text) ?? repairJson(text);
+  let raw = extractJsonObject(text);
+  // a valid inner object (e.g. args) can hide a broken outer one: prefer a repaired whole reply that has "tool"
+  if (!raw || !/"tool"\s*:/.test(raw)) raw = repairJson(text) ?? raw;
   if (!raw) return { ok: false, error: "No JSON object found. Reply with exactly one JSON object: {\"thought\": string, \"tool\": string, \"args\": object}." };
   let obj: Record<string, unknown>;
   try {

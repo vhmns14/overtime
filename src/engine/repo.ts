@@ -2,7 +2,7 @@
 // fetched lazily and cached. Agents' writes, patches and deletions are staged on top and never touch
 // GitHub until Ops opens the pull request.
 
-import { unifiedDiff, lineDiff, diffStats } from "./diff";
+import { unifiedDiff, fileDiff, diffStats } from "./diff";
 import type { GitHubClient, TreeEntry } from "./github";
 
 export interface RepoFile { path: string; sha: string; size: number }
@@ -61,7 +61,7 @@ export function snapshotFromTree(repo: string, branch: string, sha: string, entr
     if (files.length >= LIMITS.maxEntries) { ignored++; reasons["entry cap"] = (reasons["entry cap"] ?? 0) + 1; continue; }
     files.push({ path: e.path, sha: e.sha, size: e.size ?? 0 });
   }
-  files.sort((a, z) => a.path.localeCompare(z.path));
+  files.sort((a, z) => (a.path < z.path ? -1 : a.path > z.path ? 1 : 0));
   return { repo, branch, sha, files, ignored: { count: ignored, reasons }, truncated };
 }
 
@@ -220,12 +220,12 @@ export class RepoFS {
       const before = inBase ? this.cache.get(path) : undefined;
       if (after === null) {
         if (!inBase) continue;
-        const removed = before ? before.split("\n").length : this.base.get(path)!.size ? 1 : 0;
+        const removed = before !== undefined ? fileDiff(before, "").length : this.base.get(path)!.size ? 1 : 0;
         out.push({ path, status: "deleted", before, added: 0, removed });
         continue;
       }
       if (inBase && before === after) continue;
-      const st = diffStats(lineDiff(before ?? "", after));
+      const st = diffStats(fileDiff(before ?? "", after));
       out.push({ path, status: inBase ? "modified" : "added", before, after, ...st });
     }
     return out;
