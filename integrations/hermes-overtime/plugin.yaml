@@ -21,5 +21,6 @@ provides_hooks:
   - post_approval_response
   - on_human_input_request
   - on_human_input_resolved
+  - on_skill_lifecycle
 # OVERTIME_URL and OVERTIME_TOKEN come from Overtime's "Connect Hermes" screen; put them in ~/.hermes/.env.
 # Without them the plugin loads, sends nothing, and /overtime explains how to connect.

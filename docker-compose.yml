@@ -1,0 +1,17 @@
+# docker compose up -d   →   http://localhost:8787
+# Offices, buildings and previews live in the "overtime-data" volume and survive restarts/upgrades.
+services:
+  overtime:
+    build: .
+    image: overtime:local
+    ports:
+      - "8787:8787"
+    volumes:
+      - overtime-data:/data
+    environment:
+      # days without events before an office is deleted
+      EXT_TTL_DAYS: "30"
+    restart: unless-stopped
+
+volumes:
+  overtime-data:

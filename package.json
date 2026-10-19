@@ -12,7 +12,7 @@
     "dev:worker": "wrangler dev --port 8787 --ip 127.0.0.1 --local",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "build:preview": "PREVIEW=1 vite build && node scripts/finalize-preview.mjs",
-    "atlas": "python3 scripts/build-atlas.py",
+    "atlas": "python3 scripts/build-atlas.py && python3 scripts/build-props.py",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:control": "playwright test -c playwright.control.config.ts",
@@ -20,7 +20,9 @@
     "gen:schema": "vite-node scripts/gen-events-schema.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p worker/tsconfig.json",
     "deploy": "npm run build && wrangler deploy",
-    "live:smoke": "vite-node scripts/live-smoke.ts"
+    "live:smoke": "vite-node scripts/live-smoke.ts",
+    "selfhost": "node scripts/selfhost.mjs",
+    "test:selfhost": "node scripts/selfhost-smoke.mjs"
   },
   "dependencies": {
     "parse5": "^7.3.0"
@@ -35,5 +37,27 @@
     "vite-plugin-singlefile": "^2.3.0",
     "vitest": "^3.2.4",
     "wrangler": "^4.151.1"
+  },
+  "cloudflare": {
+    "bindings": {
+      "EXT_OFFICES": {
+        "description": "One SQLite Durable Object per Hermes install (an **office**): its events, tokens and live stream."
+      },
+      "EXT_BUILDINGS": {
+        "description": "One SQLite Durable Object per **building**: indexes several offices as floors."
+      },
+      "PREVIEWS": {
+        "description": "Run previews of the built-in team, served at `/p/<runId>/`."
+      },
+      "EXT_TTL_DAYS": {
+        "description": "Days without events before an office is deleted (default `30`)."
+      },
+      "PREVIEW_TTL_DAYS": {
+        "description": "Days a built-in team preview stays up (default `7`)."
+      },
+      "ALLOW_LOCAL_LLM": {
+        "description": "Keep `0` in production. `1` only lets `wrangler dev` proxy to a local Ollama."
+      }
+    }
   }
 }

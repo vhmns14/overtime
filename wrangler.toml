@@ -1,6 +1,7 @@
 # Overtime: one Worker serves the app (Workers Static Assets), the BYO-key LLM proxy,
 # the Research page fetcher, run previews at /p/<runId>/ (SQLite Durable Object per run), and
-# external-agent offices for Hermes at /api/ext/* (SQLite Durable Object per office).
+# external-agent offices for Hermes at /api/ext/* (SQLite Durable Object per office; remote control
+# lives in the same class, so it needs no migration), and buildings that group offices as floors.
 name = "overtime"
 main = "worker/src/index.ts"
 compatibility_date = "2025-09-01"
@@ -20,6 +21,10 @@ class_name = "PreviewStore"
 name = "EXT_OFFICES"
 class_name = "ExtOffice"
 
+[[durable_objects.bindings]]
+name = "EXT_BUILDINGS"
+class_name = "ExtBuilding"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["PreviewStore"]
@@ -27,6 +32,11 @@ new_sqlite_classes = ["PreviewStore"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["ExtOffice"]
+
+# buildings: several Hermes installs (offices) as floors of one building
+[[migrations]]
+tag = "office-buildings-v1"
+new_sqlite_classes = ["ExtBuilding"]
 
 [vars]
 PREVIEW_TTL_DAYS = "7"

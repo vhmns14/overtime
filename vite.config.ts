@@ -6,7 +6,7 @@ import type { Plugin } from "vite";
 
 /** Serves the Hermes plugin from the app itself, so the Connect screen's curl lines point at your own deployment. */
 function hermesPluginFiles(): Plugin {
-  const files = ["plugin.yaml", "__init__.py", "overtime_control.py"];
+  const files = ["plugin.yaml", "__init__.py", "overtime_control.py", "install.sh"];
   return {
     name: "hermes-overtime-files",
     generateBundle() {
@@ -14,7 +14,7 @@ function hermesPluginFiles(): Plugin {
     },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        const m = req.url?.match(/^\/hermes-overtime\/(plugin\.yaml|__init__\.py|overtime_control\.py)$/);
+        const m = req.url?.match(/^\/hermes-overtime\/(plugin\.yaml|__init__\.py|overtime_control\.py|install\.sh)$/);
         if (!m) return next();
         res.setHeader("content-type", "text/plain; charset=utf-8");
         res.end(readFileSync(resolve(__dirname, "integrations/hermes-overtime", m[1]), "utf8"));

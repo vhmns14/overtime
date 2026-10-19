@@ -26,6 +26,9 @@ interface Actor {
   arrive?: (ok?: boolean) => void;
   bubble?: { text: string; until: number; kind: "talk" | "think" | "wait" };
   phase: number;
+  /** office reactions: dozing at the desk, lying on the sofa, the wake-up stretch, a slump after a failure */
+  pose?: "sleep" | "lie" | "stretch" | "slump";
+  poseUntil?: number;
   el: HTMLElement;
   tag: HTMLElement;
   bub: HTMLElement;
@@ -40,6 +43,19 @@ export interface OfficeOptions {
   speed?: number;
   onSelect?: (role: Role) => void;
 }
+
+/** Extra drawing on top of the room (props, lighting, particles). Coordinates are office.png pixels. */
+export interface OfficeLayer {
+  /** after the room, before the light and the characters */
+  back?(ctx: CanvasRenderingContext2D, t: number): void;
+  /** after the characters */
+  top?(ctx: CanvasRenderingContext2D, t: number): void;
+  /** once per frame after drawing, for DOM overlays (use office.bgToScreen) */
+  place?(t: number): void;
+}
+
+/** where a dozing character lies on the bench by the meeting table (feet → head along the seat) */
+export const SOFA = { approach: { x: 770, y: 652 }, seat: { x: 812, y: 690 }, angle: -0.43, backTop: { x0: 788, y0: 706, slope: -0.46 } };
 
 export class Office {
   private ctx: CanvasRenderingContext2D;
@@ -57,6 +73,9 @@ export class Office {
   private nextAmbient = 0;
   private rand = rng(20261019);
   private ro: ResizeObserver;
+  private layers: OfficeLayer[] = [];
+  /** 0 = lights on, 1 = lamps fully dimmed (idle office) */
+  dim = 0;
   speed: number;
 
   constructor(private root: HTMLElement, private bg: HTMLImageElement, private atlas: HTMLImageElement, private opts: OfficeOptions = {}) {
@@ -125,7 +144,8 @@ export class Office {
     c.style.width = W + "px";
     c.style.height = H + "px";
     let s = Math.min(W / ROOM.w, H / ROOM.h) * 1.13;
-    let cx = ROOM.x + ROOM.w / 2, cy = ROOM.y + ROOM.h / 2;
+    // a little right of centre, so the bookshelf by the right wall stays in view
+    let cx = ROOM.x + ROOM.w / 2 + 36, cy = ROOM.y + ROOM.h / 2;
     if (W < 680 || W / Math.max(1, H) < 0.9) {
       // narrow (phone): zoom into the desk cluster like the mobile mockup
       s = Math.max(s, Math.min(H / 500, W / 600));
@@ -213,7 +233,7 @@ export class Office {
     // ambient life: idle agents fetch coffee now and then
     if (t > this.nextAmbient) {
       this.nextAmbient = t + (7000 + this.rand() * 7000);
-      const idle = ROLES.filter((r) => { const a = this.actors[r]; return !a.working && !a.busy && !a.waiting && a.mode === "sit"; });
+      const idle = this.dim > 0.5 ? [] : ROLES.filter((r) => { const a = this.actors[r]; return !a.working && !a.busy && !a.waiting && a.mode === "sit" && !a.pose; });
       const coffeeTaken = ROLES.some((r) => this.actors[r].busy && this.actors[r].mode === "mug");
       if (idle.length && !coffeeTaken) this.coffee(idle[Math.floor(this.rand() * idle.length)]);
     }
@@ -240,6 +260,7 @@ export class Office {
   // ---------- public API driven by run events ----------
   setWorking(role: Role, working: boolean) {
     const a = this.actors[role];
+    if (working && (a.pose === "sleep" || a.pose === "lie")) void this.wake(role);
     a.waiting = false;
     if (a.bubble?.kind === "wait") a.bubble = undefined;
     a.working = working;
@@ -340,8 +361,75 @@ export class Office {
     if (!on) q?.remove();
   }
 
+
+  // ---------- office reactions (src/office/ambience.ts drives these) ----------
+  addLayer(l: OfficeLayer) { this.layers.push(l); }
+
+  /** office.png pixel → CSS pixel inside the office element */
+  bgToScreen(p: Pt): Pt { return this.toScreen(p); }
+  get viewScale() { return this.view.s; }
+
+  isPosed(role: Role) { return !!this.actors[role].pose; }
+
+  /** where a character's head is (office.png pixels) and what it is doing, for particles like Zzz */
+  actorInfo(role: Role): { head: Pt; pose?: string; mode: string } {
+    const a = this.actors[role];
+    if (a.pose === "lie") return { head: { x: SOFA.seat.x + 14, y: SOFA.seat.y - 18 }, pose: a.pose, mode: a.mode };
+    const f = FRAMES[this.frameFor(a, 0).name];
+    return { head: { x: a.x, y: a.y - (f?.h ?? 60) + 6 }, pose: a.pose, mode: a.mode };
+  }
+
+  /** Doze at the desk (or lie down on the bench when `sofa`). */
+  async sleep(role: Role, sofa = false) {
+    const a = this.actors[role];
+    if (a.pose === "sleep" || a.pose === "lie") return;
+    a.working = false;
+    if (a.bubble?.kind !== "wait") a.bubble = undefined;
+    if (sofa) {
+      a.busy = true;
+      if (!(await this.go(role, SOFA.approach))) return;
+      a.mode = "stand";
+      a.pose = "lie";
+      a.poseUntil = Infinity;
+      return;
+    }
+    if (a.mode !== "sit") await this.sit(role);
+    a.pose = "sleep";
+    a.poseUntil = Infinity;
+  }
+
+  /** Wake up: stretch where they are, then go back to the desk. */
+  async wake(role: Role, stretch = true) {
+    const a = this.actors[role];
+    const was = a.pose;
+    if (!was || was === "stretch") return;
+    if (!stretch) { a.pose = undefined; if (was === "lie") { a.busy = false; void this.sit(role); } return; }
+    if (was === "lie") { a.x = SOFA.approach.x; a.y = SOFA.approach.y; a.mode = "stand"; a.look = "front"; a.flip = false; }
+    a.pose = "stretch";
+    a.poseUntil = performance.now() + 1600 * Math.max(0.5, this.speed);
+    this.say(role, ["*yawn*", "Huh? Back to it!", "*stretch*", "Morning!"][ROLES.indexOf(role) % 4], "talk", 1500);
+    await this.wait(1600);
+    if (a.pose === "stretch") a.pose = undefined;
+    if (was === "lie") { a.busy = false; if (!a.waiting) await this.sit(role); }
+  }
+
+  /** Small celebration: everyone hops. */
+  cheer(line = "Nice!") {
+    const now = performance.now();
+    for (const r of ROLES) if (!this.actors[r].pose) this.celebrateUntil[r] = now + (1000 + ROLES.indexOf(r) * 120) * Math.max(0.5, this.speed);
+    this.say("pm", line, "talk", 1800);
+  }
+
+  /** A slump after a failed turn. */
+  slump(line = "Oof.") {
+    const until = performance.now() + 3200 * Math.max(0.5, this.speed);
+    for (const r of ROLES) { const a = this.actors[r]; if (!a.pose && a.mode === "sit") { a.pose = "slump"; a.poseUntil = until; } }
+    this.say("pm", line, "talk", 2000);
+  }
+
   reset() {
     for (const r of ROLES) this.setStuck(r, false);
+    for (const r of ROLES) { const a = this.actors[r]; if (a.pose === "slump" || a.pose === "stretch") a.pose = undefined; }
     for (const r of ROLES) this.setTag(r, null);
     this.tickets = [];
     this.prNote = null;
@@ -349,6 +437,7 @@ export class Office {
     for (const r of ROLES) {
       const a = this.actors[r];
       a.working = false; a.waiting = false; a.busy = false; a.bubble = undefined;
+      if (a.pose === "lie") { a.pose = undefined; a.x = SOFA.approach.x; a.y = SOFA.approach.y; a.mode = "stand"; }
       void this.sit(r);
     }
   }
@@ -366,11 +455,12 @@ export class Office {
     this.drawRain(t);
     this.drawTickets();
     this.drawPrNote();
+    for (const l of this.layers) l.back?.(ctx, t);
 
     // light
     ctx.globalCompositeOperation = "lighter";
     LAMPS.forEach((l, i) => {
-      const a = l.a * (0.9 + 0.1 * Math.sin(t / 700 + i * 1.7));
+      const a = l.a * (0.9 + 0.1 * Math.sin(t / 700 + i * 1.7)) * (1 - 0.75 * this.dim);
       const g = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, l.r);
       g.addColorStop(0, `rgba(255,170,80,${a})`);
       g.addColorStop(1, "rgba(255,140,60,0)");
@@ -396,20 +486,31 @@ export class Office {
       const fr = this.frameFor(a, t);
       const f = FRAMES[fr.name];
       if (!f) continue;
-      if (a.mode !== "sit") {
+      if (a.mode !== "sit" && a.pose !== "lie") {
         ctx.fillStyle = "rgba(10,6,4,0.35)";
         ctx.beginPath();
         ctx.ellipse(a.x, a.y - 1, f.w * 0.36, 4.5, 0, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.save();
+      if (a.pose && a.poseUntil !== undefined && performance.now() > a.poseUntil) a.pose = undefined;
+      if (a.pose === "lie") { this.drawLying(a, t); ctx.restore(); continue; }
       if (fr.clipY !== undefined) { ctx.beginPath(); ctx.rect(a.x - 80, a.y - 200, 160, 200 - (a.y - fr.clipY)); ctx.clip(); }
       const until = this.celebrateUntil[a.role] ?? 0;
       const hop = t < until ? Math.abs(Math.sin(t / 140)) * 9 : 0;
-      const dx = Math.round(a.x - f.w / 2), dy = Math.round(a.y - f.h - hop);
+      // dozing: the head sinks (and bobs with the breath); a slump sinks less
+      const sink = a.pose === "sleep" ? 4 + Math.round(Math.sin(t / 900 + a.phase)) : a.pose === "slump" ? 3 : 0;
+      const dx = Math.round(a.x - f.w / 2), dy = Math.round(a.y - f.h - hop + sink);
+      // a stuck agent (insights) sways while scratching its head
       const stuck = this.stuck.has(a.role);
       if (stuck) { ctx.translate(a.x, a.y); ctx.rotate(Math.sin(t / 160) * 0.045); ctx.translate(-a.x, -a.y); }
-      if (fr.flip) {
+      if (a.pose === "stretch") {
+        // stretch: taller for a moment, from the feet up
+        const k = 1 + 0.09 * Math.abs(Math.sin(t / 260));
+        ctx.translate(Math.round(a.x), Math.round(a.y));
+        ctx.scale(fr.flip ? -1 : 1, k);
+        ctx.drawImage(this.atlas, f.x, f.y, f.w, f.h, -Math.round(f.w / 2), -f.h, f.w, f.h);
+      } else if (fr.flip) {
         ctx.translate(dx + f.w, dy);
         ctx.scale(-1, 1);
         ctx.drawImage(this.atlas, f.x, f.y, f.w, f.h, 0, 0, f.w, f.h);
@@ -424,7 +525,31 @@ export class Office {
       this.windowPath();
       ctx.fill();
     }
+    for (const l of this.layers) l.top?.(ctx, t);
     this.placeOverlays(t, order);
+    for (const l of this.layers) l.place?.(t);
+  }
+
+  /** a character lying on the bench, seen above its backrest */
+  private drawLying(a: Actor, t: number) {
+    const c = this.ctx;
+    const f = FRAMES[`${a.role}_idle`];
+    if (!f) return;
+    const b = SOFA.backTop;
+    c.save();
+    // only what is above the backrest's top edge shows
+    c.beginPath();
+    c.moveTo(b.x0 - 80, b.y0 + 80 * -b.slope - 0);
+    c.lineTo(b.x0 - 80, 0);
+    c.lineTo(b.x0 + 200, 0);
+    c.lineTo(b.x0 + 200, b.y0 + 200 * b.slope);
+    c.closePath();
+    c.clip();
+    const breathe = Math.sin(t / 900 + a.phase) * 0.6;
+    c.translate(SOFA.seat.x, SOFA.seat.y + breathe);
+    c.rotate(SOFA.angle - Math.PI / 2);
+    c.drawImage(this.atlas, f.x, f.y, f.w, f.h, -Math.round(f.w / 2), -Math.round(f.h / 2), f.w, f.h);
+    c.restore();
   }
 
   /** A hand scratching the head: a small skin-coloured block bobbing over the hair, with scratch marks. */
@@ -538,9 +663,10 @@ export class Office {
     order.forEach((a, i) => {
       const fr = this.frameFor(a, t);
       const f = FRAMES[fr.name];
-      const top = fr.clipY !== undefined ? a.y - f.h : a.y - f.h;
-      const p = this.toScreen({ x: a.x, y: top });
-      const base = this.toScreen({ x: a.x, y: a.y });
+      const lying = a.pose === "lie";
+      const top = lying ? SOFA.seat.y - 26 : a.y - f.h;
+      const p = this.toScreen({ x: lying ? SOFA.seat.x : a.x, y: top });
+      const base = this.toScreen({ x: a.x, y: lying ? SOFA.seat.y + 6 : a.y });
       a.el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
       a.el.style.height = Math.max(20, base.y - p.y) + "px";
       a.el.style.zIndex = String(10 + i);
@@ -553,6 +679,7 @@ export class Office {
       } else a.bub.hidden = true;
       a.el.classList.toggle("is-working", a.working);
       a.el.classList.toggle("is-waiting", a.waiting);
+      a.el.classList.toggle("is-asleep", a.pose === "sleep" || a.pose === "lie");
     });
   }
 }

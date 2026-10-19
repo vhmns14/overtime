@@ -26,6 +26,7 @@
     "tests/ext-worker.test.ts",
     "tests/control.test.ts",
     "tests/notify.test.ts",
+    "tests/office-building.test.ts",
     "tests/helpers/**"
   ]
 }
