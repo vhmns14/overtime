@@ -206,7 +206,7 @@ export class BuildingView {
       const label = f ? f.name : "Vacant floor";
       const line = f ? `${STATUS_LABEL[st]}${f.stats ? ` · ${ago(f.stats.lastActivity, now)}` : ""}` : "add a Hermes";
       if (f) html += `<button type="button" class="floor-hot" data-floor="${r.floor}" style="left:${Math.round(a.x)}px;top:${Math.round(a.y)}px;width:${Math.round(b.x - a.x)}px;height:${Math.round(b.y - a.y)}px" aria-label="Floor ${r.floor}: ${esc(label)}, ${esc(line)}. Enter the office"></button>`;
-      html += `<div class="floor-plate" style="left:${Math.round(a.x) - 10}px;top:${Math.round((a.y + b.y) / 2)}px"><b>${r.floor} · ${esc(label.slice(0, 26))}</b><span class="${st === "lit" ? "live" : ""}">${esc(line)}</span></div>`;
+      html += `<div class="floor-plate" style="left:${Math.round(a.x) - 10}px;top:${Math.round((a.y + b.y) / 2)}px;max-width:${Math.max(48, Math.round(a.x) - 18)}px"><b>${r.floor} · ${esc(label.slice(0, 26))}</b><span class="${st === "lit" ? "live" : ""}">${esc(line)}</span></div>`;
     }
     this.hot.innerHTML = html;
     for (const el of this.hot.querySelectorAll<HTMLElement>(".floor-hot")) el.addEventListener("click", () => this.onEnter(Number(el.dataset.floor)));

@@ -33,3 +33,15 @@ test("phone: full-screen approval card with portrait, diff snippet and spend", a
   await expect(page.locator("#steps-h li.active .pip, #steps-h li.done").first()).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test("phone: the top bar (Building, Files, Insights, Settings) fits without widening the page", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) > 600, "phone only");
+  for (const width of [360, 390]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/?target=demo-hermes");
+    await expect(page.locator('.bar-actions [data-building]')).toBeVisible();
+    const w = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, inner: window.innerWidth, bar: Math.round(document.querySelector(".bar-actions")!.getBoundingClientRect().right) }));
+    expect(w.doc).toBeLessThanOrEqual(width);
+    expect(w.bar).toBeLessThanOrEqual(width);
+  }
+});

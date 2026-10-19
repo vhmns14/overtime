@@ -828,7 +828,7 @@ export class InsightsController {
       </div>
       <div class="task-row"><button type="button" class="btn btn-sm btn-primary" data-al="save">Save</button><button type="button" class="link-btn" data-al="reset">Reset to defaults</button><span class="cost-meta" data-al="msg"></span></div>
       <h3>Notifications hook</h3>
-      <p>Insights emit two signals that a notifier (Telegram, web push) can subscribe to: <code>session.stuck</code> and <code>budget.exceeded</code>, each once per condition. In code: <code>onSignal(fn)</code> from <code>src/insights/signals.ts</code>; from outside: <code>window.addEventListener("overtime:signal", …)</code>. Schema in docs/EVENTS.md.</p>
+      <p>Telegram and web push come from <b>Remote control</b>, checked by the office itself so no tab has to be open: it notifies when a working session goes quiet (its own stuck timer) and, once per day or month, past a budget. Saving limits here on a paired device also sets them there. The browser signals below (<code>session.stuck</code>, <code>budget.exceeded</code>) are informational and never send a message themselves, so nothing is notified twice. In code: <code>onSignal(fn)</code> from <code>src/insights/signals.ts</code>; from outside: <code>window.addEventListener("overtime:signal", …)</code>. Schema in docs/EVENTS.md.</p>
       <ol class="sig-list" aria-label="Recent signals">${this.recentSignals.length ? this.recentSignals.map((s) => `<li><code>${s.type}</code> ${esc(s.type === "session.stuck" ? `${s.title}: ${s.reasons[0]?.text ?? ""}` : `${s.period} ${fmtUsd(s.spentUsd)} of ${fmtUsd(s.limitUsd)}`)} <small>${new Date(s.at).toLocaleTimeString("en-US", { hour12: false })}</small></li>`).join("") : `<li class="ins-empty">No signals in this tab yet.</li>`}</ol>
     </div>`;
   }
@@ -847,6 +847,9 @@ export class InsightsController {
       this.renderOverlay();
       const m = this.els.overlay.querySelector<HTMLElement>('[data-al="msg"]');
       if (m) m.textContent = "Saved.";
+      // with remote control paired, the office itself checks the same limits and notifies (Telegram / push)
+      const ctl = this.host.hermes.control;
+      if (ctl?.paired) void ctl.syncBudget(this.budget).then((ok) => { const m2 = this.els.overlay.querySelector<HTMLElement>('[data-al="msg"]'); if (m2) m2.textContent = ok ? "Saved. Remote control will notify you past a limit." : "Saved here; could not update Remote control."; });
     });
     el.querySelector('[data-al="reset"]')!.addEventListener("click", () => { this.stuck = { ...DEFAULT_STUCK }; this.budget = { ...DEFAULT_BUDGET }; this.save(); this.check(); this.renderOverlay(); });
   }

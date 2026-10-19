@@ -11,10 +11,12 @@
 #
 # Options: --privacy metadata|args|full (default metadata) · --name "My Hermes" (with --create)
 #          --hermes-home DIR (default $HERMES_HOME or ~/.hermes) · --no-enable · --no-test
+#          --remote-approval · --remote-tasks   opt in to remote control (also turn it on in the office;
+#          --remote-tasks also needs API_SERVER_ENABLED=true and API_SERVER_KEY in the same .env)
 # Needs: sh, curl. Uses python3 for JSON when it is there (Hermes always has it).
 set -eu
 
-URL="" TOKEN="" PRIVACY="metadata" SERVER="" CREATE=0 NAME="" ENABLE=1 TEST=1
+URL="" TOKEN="" PRIVACY="metadata" SERVER="" CREATE=0 NAME="" ENABLE=1 TEST=1 RAPPROVAL=0 RTASKS=0
 HH="${HERMES_HOME:-$HOME/.hermes}"
 
 say() { printf '%s\n' "overtime: $*"; }
@@ -31,7 +33,9 @@ while [ $# -gt 0 ]; do
     --hermes-home) HH="${2:-}"; shift 2 ;;
     --no-enable) ENABLE=0; shift ;;
     --no-test) TEST=0; shift ;;
-    -h|--help) sed -n '2,16p' "$0" 2>/dev/null || true; exit 0 ;;
+    --remote-approval) RAPPROVAL=1; shift ;;
+    --remote-tasks) RTASKS=1; shift ;;
+    -h|--help) sed -n '2,18p' "$0" 2>/dev/null || true; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
 done
@@ -71,17 +75,36 @@ for f in plugin.yaml __init__.py; do
   curl -fsSL "$ORIGIN/hermes-overtime/$f" -o "$DIR/$f.tmp" || die "could not download $ORIGIN/hermes-overtime/$f"
   mv "$DIR/$f.tmp" "$DIR/$f"
 done
+# the remote-control module: loaded only when OVERTIME_REMOTE_APPROVAL / OVERTIME_REMOTE_TASKS is set
+if curl -fsSL "$ORIGIN/hermes-overtime/overtime_control.py" -o "$DIR/overtime_control.py.tmp" 2>/dev/null; then
+  mv "$DIR/overtime_control.py.tmp" "$DIR/overtime_control.py"
+else
+  rm -f "$DIR/overtime_control.py.tmp"
+  [ "$RAPPROVAL$RTASKS" = "00" ] || die "this Overtime server does not serve overtime_control.py (remote control needs a newer Overtime)"
+fi
 say "plugin installed in $DIR"
 
 # 2. settings in $HERMES_HOME/.env (older OVERTIME_* lines are replaced)
 ENVF="$HH/.env"
 touch "$ENVF"
 tmp="$ENVF.overtime.tmp"
-grep -v -E '^(OVERTIME_URL|OVERTIME_TOKEN|OVERTIME_PRIVACY)=' "$ENVF" > "$tmp" || true
-{ cat "$tmp"; printf 'OVERTIME_URL=%s\nOVERTIME_TOKEN=%s\nOVERTIME_PRIVACY=%s\n' "$URL" "$TOKEN" "$PRIVACY"; } > "$ENVF"
+CTLRE='OVERTIME_URL|OVERTIME_TOKEN|OVERTIME_PRIVACY'
+[ "$RAPPROVAL" = 1 ] && CTLRE="$CTLRE|OVERTIME_REMOTE_APPROVAL"
+[ "$RTASKS" = 1 ] && CTLRE="$CTLRE|OVERTIME_REMOTE_TASKS"
+grep -v -E "^($CTLRE)=" "$ENVF" > "$tmp" || true
+{
+  cat "$tmp"
+  printf 'OVERTIME_URL=%s\nOVERTIME_TOKEN=%s\nOVERTIME_PRIVACY=%s\n' "$URL" "$TOKEN" "$PRIVACY"
+  [ "$RAPPROVAL" = 1 ] && printf 'OVERTIME_REMOTE_APPROVAL=1\n'
+  [ "$RTASKS" = 1 ] && printf 'OVERTIME_REMOTE_TASKS=1\n'
+  true
+} > "$ENVF"
 rm -f "$tmp"
 chmod 600 "$ENVF" 2>/dev/null || true
 say "settings written to $ENVF (privacy: $PRIVACY)"
+if [ "$RTASKS" = 1 ] && ! grep -q '^API_SERVER_ENABLED=true' "$ENVF"; then
+  say "note: --remote-tasks starts runs through Hermes' API server: add API_SERVER_ENABLED=true and API_SERVER_KEY=<long random key> to $ENVF"
+fi
 
 # 3. enable it (observer hooks only: answer "no" to overriding built-in tools)
 HERMES=""

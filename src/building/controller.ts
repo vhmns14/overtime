@@ -6,7 +6,7 @@
 
 import { store } from "../engine/storage";
 import { BuildingView } from "./view";
-import { STATUS_LABEL, ago, floorAt, floorStatus, installLine, normaliseFloors, type Floor } from "./model";
+import { STATUS_LABEL, ago, demoFloors, floorAt, floorStatus, installLine, normaliseFloors, type Floor } from "./model";
 
 export interface BuildingCreds { id: string; adminToken: string; viewToken: string; origin: string; name: string }
 export interface OfficeCredsLike { runId: string; ingestToken: string; viewToken: string; webhookSecret: string; privacy: "metadata" | "args" | "full"; createdAt: number; origin: string }
@@ -39,6 +39,9 @@ export class BuildingController {
   /** the floor (room number) whose office is on screen, or 0 when looking at the building */
   current = 0;
   active = false;
+  /** the offline sample building (no Worker needed): preview.html and the recorded demo */
+  demo = false;
+  private demoAt = 0;
   private view: BuildingView;
   private box: HTMLElement;
   private elevator: HTMLElement;
@@ -72,7 +75,17 @@ export class BuildingController {
 
   private get id() { return this.watch?.id ?? this.creds?.id ?? ""; }
   private get token() { return this.watch?.token || this.creds?.adminToken || ""; }
-  get inBuilding() { return !!this.id; }
+  get inBuilding() { return !!this.id || this.demo; }
+
+  /** Opens the offline sample building: floor 1 is the recorded Hermes demo, the others are samples. */
+  async openDemo() {
+    this.demo = true;
+    this.demoAt = Date.now();
+    this.name = "Demo building";
+    this.role = "view";
+    this.error = "";
+    await this.open(null);
+  }
 
   private officeCreds(office: string): OfficeCredsLike | null {
     const own = this.host.ownOffice();
@@ -121,6 +134,14 @@ export class BuildingController {
   }
 
   async refresh() {
+    if (this.demo) {
+      // keep the sample's ages steady while you look around
+      this.floors = demoFloors(this.demoAt + Math.min(Date.now() - this.demoAt, 60_000));
+      this.view.setData(this.name, this.floors);
+      this.render();
+      if (!this.elevator.hidden) this.renderElevator();
+      return;
+    }
     if (!this.id) { this.render(); return; }
     try {
       const r = await fetch(`/api/ext/buildings/${encodeURIComponent(this.id)}`, { headers: { authorization: `Bearer ${this.token}` } });
@@ -195,6 +216,7 @@ export class BuildingController {
   enterRoom(room: number) {
     const f = floorAt(this.floors, room);
     if (!f) return;
+    if (this.demo && f.office !== "demo") { this.host.toast("A sample floor. Connect your own Hermes installs to fill a real building."); return; }
     const go = () => {
       this.inside(room);
       this.host.enterOffice(f, this.officeCreds(f.office), `Floor ${room} · ${f.name}`);
@@ -241,7 +263,7 @@ export class BuildingController {
     const created = this.adding.created;
     this.box.innerHTML = `
       ${this.error ? `<div class="err" role="alert">${esc(this.error)}</div>` : ""}
-      <p class="bx-lead"><b>${esc(this.name || "Building")}</b> · ${this.floors.length} floor${this.floors.length === 1 ? "" : "s"}${admin ? "" : " · read-only"}. One floor per Hermes install; lit floors are working right now. Click a floor to go in.</p>
+      <p class="bx-lead"><b>${esc(this.name || "Building")}</b> · ${this.floors.length} floor${this.floors.length === 1 ? "" : "s"}${admin || this.demo ? "" : " · read-only"}. One floor per Hermes install; lit floors are working right now. Click a floor to go in.</p>
       <ol class="bx-floors" aria-label="Floors">${rows || `<li class="lib-empty">No floors yet.</li>`}</ol>
       ${admin ? `
         <details class="bx-add" ${created || this.adding.busy ? "open" : ""}><summary>Add another Hermes</summary>
@@ -253,6 +275,7 @@ export class BuildingController {
           </div>
         </details>
         <div class="task-row"><button type="button" class="btn btn-sm" data-bx="share">Copy read-only building link</button><span class="spacer"></span><button type="button" class="link-btn" data-bx="leave">Back to my office</button></div>`
+      : this.demo ? `<div class="task-row"><span class="task-mode">Sample building · offline demo</span><span class="spacer"></span><button type="button" class="link-btn" data-bx="leave">Back to the demo</button></div>`
       : `<div class="task-row"><span class="task-mode">Read-only building</span></div>`}`;
     for (const b of this.box.querySelectorAll<HTMLElement>("[data-room]")) b.addEventListener("click", () => this.enterRoom(Number(b.dataset.room)));
     this.box.querySelector('[data-bx="add"]')?.addEventListener("click", () => {

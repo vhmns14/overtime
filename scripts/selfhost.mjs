@@ -7,6 +7,8 @@
 //   OVERTIME_DATA=/data   where the SQLite state lives (mount a volume here)
 //   PORT=8787  HOST=0.0.0.0
 //   EXT_TTL_DAYS=30  PREVIEW_TTL_DAYS=7   (optional overrides of wrangler.toml [vars])
+//   remote control (optional): PUBLIC_URL, OVERTIME_SECRET_KEY, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,
+//   VAPID_SUBJECT, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OVERTIME_TELEGRAM_OFFICES (see docs/SELF_HOST.md)
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -22,7 +24,8 @@ if (!existsSync(resolve(root, "dist/index.html"))) {
   process.exit(1);
 }
 const vars = [];
-for (const k of ["EXT_TTL_DAYS", "PREVIEW_TTL_DAYS"]) if (process.env[k]) vars.push("--var", `${k}:${process.env[k]}`);
+const PASS = ["EXT_TTL_DAYS", "PREVIEW_TTL_DAYS", "PUBLIC_URL", "OVERTIME_SECRET_KEY", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "OVERTIME_TELEGRAM_OFFICES"];
+for (const k of PASS) if (process.env[k]) vars.push("--var", `${k}:${process.env[k]}`);
 const wrangler = resolve(root, "node_modules/wrangler/bin/wrangler.js");
 const args = [wrangler, "dev", "--local", "--ip", host, "--port", port, "--persist-to", data, "--show-interactive-dev-session=false", "--log-level", process.env.LOG_LEVEL ?? "warn", "--inspector-port", process.env.INSPECTOR_PORT ?? "0", ...vars];
 console.log(`overtime: serving on http://${host}:${port} · data in ${data}`);

@@ -123,6 +123,14 @@ test("building: create from my office, add a second Hermes, ride the elevator be
   await expect(box.locator('[data-bx="line"]')).toContainText("--token ot_ing_");
   await expect(page.locator(".floor-hot")).toHaveCount(2);
   await expect(page.locator(".floor-plate").filter({ hasText: "VPS · cron" })).toHaveCount(1);
+  // nothing in the building panel (long model names, the installer line) widens the page or the panel
+  const fits = await page.evaluate(() => {
+    const box = document.querySelector("#building-box")!.getBoundingClientRect();
+    const rows = [...document.querySelectorAll("#building-box .bx-floor, #building-box .hx-snippet")].map((e) => e.getBoundingClientRect().right);
+    return { page: document.documentElement.scrollWidth <= window.innerWidth, rows: rows.every((r) => r <= box.right + 1) };
+  });
+  expect(fits).toEqual({ page: true, rows: true });
+  await expect(page.locator(".rp-open")).toBeHidden();
   await shot(page, "building");
 
   // floor 1 is lit (Hermes is working there); walk in, then take the elevator to floor 2 and back

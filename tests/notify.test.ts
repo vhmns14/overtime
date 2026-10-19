@@ -5,13 +5,28 @@ import { createPublicKey, createVerify } from "node:crypto";
 import { handleExt } from "../worker/src/ext";
 import { ControlOffice, handleControl, type ControlEnv } from "../worker/src/control";
 import { fakeNamespace } from "./helpers/fake-do";
-import { DEFAULT_NOTIFY, candidatesFor, inQuietHours, parseNotifySettings, shouldSend, telegramBody, pushEndpointAllowed, type SentLog } from "../src/ext/notify";
+import { DEFAULT_NOTIFY, budgetCandidate, candidatesFor, inQuietHours, tzOffsetMin, parseNotifySettings, shouldSend, telegramBody, pushEndpointAllowed, type SentLog } from "../src/ext/notify";
 import { buildPushRequest, decryptPayload, encryptPayload, generateVapidKeys, vapidJwt, seal, open } from "../src/ext/webpush";
 import { b64u, unb64u } from "../src/ext/control";
 import type { ExtEvent } from "../src/ext/schema";
 
 const ev = (type: string, data: Record<string, unknown>, session = "s1", extra: Partial<ExtEvent> = {}): ExtEvent => ({ v: 1, seq: 1, type: type as never, ts: Date.parse("2026-10-19T10:00:00Z"), session, agent: "main", data: data as never, ...extra });
 const on = { ...DEFAULT_NOTIFY, enabled: true };
+
+describe("budget notifications (pure)", () => {
+  it("parses limits, keeps or clears them, and builds one candidate per period", () => {
+    const s = parseNotifySettings({ budget: { dailyUsd: 2, monthlyUsd: "x" } });
+    expect(s.budget).toEqual({ dailyUsd: 2, monthlyUsd: null });
+    expect(parseNotifySettings({ budget: { dailyUsd: null } }, s).budget.dailyUsd).toBeNull();
+    expect(parseNotifySettings({}, s).budget.dailyUsd).toBe(2);
+    const spend = { day: 2.5, month: 3, dayKey: "2026-10-19", monthKey: "2026-10" };
+    expect(budgetCandidate(spend, { dailyUsd: 2, monthlyUsd: null })).toMatchObject({ trigger: "budget", key: "budget:day:2026-10-19", title: "Daily budget exceeded" });
+    expect(budgetCandidate(spend, { dailyUsd: null, monthlyUsd: 3 })?.key).toBe("budget:month:2026-10");
+    expect(budgetCandidate(spend, { dailyUsd: 5, monthlyUsd: null })).toBeNull();
+    expect(tzOffsetMin(Date.UTC(2026, 9, 19, 10), "Asia/Jakarta")).toBe(-420);
+    expect(tzOffsetMin(Date.UTC(2026, 6, 1, 10), "America/New_York")).toBe(240);
+  });
+});
 
 describe("triggers", () => {
   it("maps approval waits, errors, failures and finished sessions; ignores subagents and finalize", () => {
@@ -245,6 +260,22 @@ describe("delivery", () => {
     const r = await call("POST", `${o.base}/notify/test`, {}, o.ctl);
     expect(r.json.results).toEqual([{ channel: "telegram", ok: true, status: 200 }]);
     expect((await call("POST", `${o.base}/notify/test`, {}, o.viewToken)).status).toBe(401);
+  });
+
+  it("notifies a budget past its limit server-side, once per period, using the insights events", async () => {
+    const o = await setup({ budget: { dailyUsd: 0.05, monthlyUsd: null } });
+    await o.post([{ type: "llm.call", session: "s1", data: { model: "m", input_tokens: 10, output_tokens: 5, cost_usd: 0.03 } }]);
+    expect(sent).toHaveLength(0);
+    await o.post([{ type: "llm.call", session: "s1", data: { model: "m", input_tokens: 10, output_tokens: 5, cost_usd: 0.03 } }]);
+    expect(sent).toHaveLength(1);
+    expect((sent[0].body as { text: string }).text).toContain("Daily budget exceeded");
+    await o.post([{ type: "llm.call", session: "s2", data: { model: "m", cost_usd: 0.5 } }]);
+    expect(sent).toHaveLength(1);
+    // the budget trigger can be switched off
+    const off = await setup({ budget: { dailyUsd: 0.01, monthlyUsd: null }, triggers: { approval: true, error: true, stuck: true, finished: false, budget: false } });
+    sent = [];
+    await off.post([{ type: "llm.call", session: "s1", data: { model: "m", cost_usd: 0.5 } }]);
+    expect(sent).toHaveLength(0);
   });
 
   it("flags a working session that goes quiet as stuck, once, via the Durable Object alarm", async () => {

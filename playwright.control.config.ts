@@ -7,6 +7,7 @@ import base from "./playwright.config";
 export default defineConfig({
   ...base,
   testMatch: /control\.spec\.ts$/,
+  testIgnore: [],
   workers: 1, // one mock Telegram API on :8932
   use: { ...base.use, baseURL: "http://127.0.0.1:8931" },
   webServer: {

@@ -14,13 +14,15 @@ import { json } from "./lib";
 import type { ExtEvent } from "../../src/ext/schema";
 import { OFFICE_ID, bearer, sha256Hex } from "../../src/ext/auth";
 import { redactString } from "../../src/ext/redact";
+import { spendNow } from "../../src/insights/aggregate";
+import { insightEvents } from "./insights";
 import {
   LIMITS_CONTROL, REMOTE_CHOICES, auditHash, cleanDeviceName, controlToken, isChoice, newAuditKeys, randomId, signAudit,
   signCommand, signDecision, validatePrompt, verifyAudit,
   type ApprovalStatus, type ApprovalView, type AuditEntry, type CommandStatus, type CommandView, type DeviceView,
 } from "../../src/ext/control";
 import {
-  DEFAULT_NOTIFY, TELEGRAM_CHAT, TELEGRAM_TOKEN, candidatesFor, parseNotifySettings, pushEndpointAllowed, shouldSend, telegramBody, toMessage,
+  DEFAULT_NOTIFY, TELEGRAM_CHAT, TELEGRAM_TOKEN, budgetCandidate, candidatesFor, tzOffsetMin, parseNotifySettings, pushEndpointAllowed, shouldSend, telegramBody, toMessage,
   type Candidate, type Message, type NotifySettings, type SentLog,
 } from "../../src/ext/notify";
 import { buildPushRequest, generateVapidKeys, open as openBox, seal, vapidFromEnv, type PushSubscriptionJSON, type VapidKeys } from "../../src/ext/webpush";
@@ -542,6 +544,21 @@ export class ControlOffice extends ExtOffice {
     for (const e of events) if (e.type === "message" && (e.data as { role?: string }).role === "user" && !titles.has(e.session)) titles.set(e.session, String((e.data as { text?: string }).text ?? ""));
     for (const c of candidatesFor(events, (sid) => titles.get(sid))) this.outbox.push(this.deliver(c).catch(() => undefined));
     if (s.triggers.stuck) this.outbox.push(this.scheduleAlarm().catch(() => undefined));
+    if (s.triggers.budget && (s.budget.dailyUsd !== null || s.budget.monthlyUsd !== null) && events.some((e) => e.type === "llm.call")) this.outbox.push(this.checkBudget().catch(() => undefined));
+  }
+
+  // ---------- budgets (server side, so a notification needs no open tab) ----------
+  /** Spend today / this month from the same events the insights route serves; notifies once per period. */
+  async checkBudget(t = now()) {
+    const s = this.notifySettings();
+    if (!s.enabled || !s.triggers.budget) return;
+    const spend = spendNow(insightEvents(this.ctx.storage.sql).events, { now: t, offsetMin: tzOffsetMin(t, s.quiet.tz) });
+    const c = budgetCandidate(spend, s.budget);
+    if (!c) return;
+    const notified = this.kv<string[]>("budget_notified", []);
+    if (notified.includes(c.key)) return;
+    this.setKv("budget_notified", [...notified, c.key].slice(-24));
+    await this.deliver(c);
   }
 
   /** Sends one notification on every configured channel that passes settings, quiet hours, dedupe and rate limits. */

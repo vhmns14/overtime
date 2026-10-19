@@ -3,7 +3,7 @@
 
 import type { ExtEvent } from "./schema";
 
-export const TRIGGERS = ["approval", "error", "stuck", "finished"] as const;
+export const TRIGGERS = ["approval", "error", "stuck", "finished", "budget"] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 
 export interface NotifySettings {
@@ -16,15 +16,19 @@ export interface NotifySettings {
   dedupeS: number;
   /** at most this many notifications per channel per hour */
   maxPerHour: number;
+  /** spending limits checked server-side on every batch with model calls (USD, null = none); days and
+   *  months follow quiet.tz, the browser's time zone saved with these settings */
+  budget: { dailyUsd: number | null; monthlyUsd: number | null };
 }
 
 export const DEFAULT_NOTIFY: NotifySettings = {
   enabled: false,
-  triggers: { approval: true, error: true, stuck: true, finished: false },
+  triggers: { approval: true, error: true, stuck: true, finished: false, budget: true },
   quiet: { on: false, start: "22:00", end: "07:00", tz: "UTC" },
   stuckMinutes: 10,
   dedupeS: 600,
   maxPerHour: 12,
+  budget: { dailyUsd: null, monthlyUsd: null },
 };
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -35,6 +39,9 @@ export function parseNotifySettings(x: unknown, base: NotifySettings = DEFAULT_N
   const t = (o.triggers && typeof o.triggers === "object" ? o.triggers : {}) as Record<string, unknown>;
   const q = (o.quiet && typeof o.quiet === "object" ? o.quiet : {}) as Record<string, unknown>;
   const tz = typeof q.tz === "string" && validTz(q.tz) ? q.tz : base.quiet.tz;
+  const b = (o.budget && typeof o.budget === "object" ? o.budget : {}) as Record<string, unknown>;
+  // a positive number sets a limit, null (or 0) clears it, anything else keeps the old one
+  const lim = (v: unknown, d: number | null) => (v === null || v === 0 ? null : typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.min(1e6, v) : d);
   const num = (v: unknown, lo: number, hi: number, d: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
   return {
     enabled: typeof o.enabled === "boolean" ? o.enabled : base.enabled,
@@ -48,6 +55,7 @@ export function parseNotifySettings(x: unknown, base: NotifySettings = DEFAULT_N
     stuckMinutes: num(o.stuckMinutes, 2, 240, base.stuckMinutes),
     dedupeS: num(o.dedupeS, 30, 86_400, base.dedupeS),
     maxPerHour: num(o.maxPerHour, 1, 60, base.maxPerHour),
+    budget: { dailyUsd: lim(b.dailyUsd, base.budget.dailyUsd), monthlyUsd: lim(b.monthlyUsd, base.budget.monthlyUsd) },
   };
 }
 
@@ -66,6 +74,25 @@ export function minutesInTz(now: number, tz: string): number {
   const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24;
   const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
   return h * 60 + m;
+}
+
+/** Offset of a time zone at `now` in Date#getTimezoneOffset terms (UTC+7 → -420). */
+export function tzOffsetMin(now: number, tz: string): number {
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(new Date(now)).map((x) => [x.type, x.value]));
+    const wall = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second));
+    return -Math.round((wall - Math.floor(now / 1000) * 1000) / 60_000);
+  } catch {
+    return 0;
+  }
+}
+
+/** A budget notification when today's or this month's spend is past its limit (key: once per period). */
+export function budgetCandidate(spend: { day: number; month: number; dayKey: string; monthKey: string }, budget: NotifySettings["budget"]): Candidate | null {
+  const usd = (v: number) => `$${v < 1 ? v.toFixed(3) : v.toFixed(2)}`;
+  if (budget.dailyUsd !== null && spend.day >= budget.dailyUsd) return { trigger: "budget", key: `budget:day:${spend.dayKey}`, session: "", title: "Daily budget exceeded", body: `Hermes spent ${usd(spend.day)} today (limit ${usd(budget.dailyUsd)}). Overtime only warns; Hermes keeps running.` };
+  if (budget.monthlyUsd !== null && spend.month >= budget.monthlyUsd) return { trigger: "budget", key: `budget:month:${spend.monthKey}`, session: "", title: "Monthly budget exceeded", body: `Hermes spent ${usd(spend.month)} this month (limit ${usd(budget.monthlyUsd)}). Overtime only warns; Hermes keeps running.` };
+  return null;
 }
 
 /** True during quiet hours. A window may cross midnight (22:00 → 07:00). */

@@ -270,12 +270,15 @@ the hash bytes (IEEE P1363, base64url) with the office's key; `publicKey` is SPK
 
 ### Notifications
 
-Settings: `enabled` (default false), `triggers` `{approval, error, stuck, finished}` (defaults
-true/true/true/false), `quiet {on, start, end, tz}` (HH:MM, IANA zone, may cross midnight),
+Settings: `enabled` (default false), `triggers` `{approval, error, stuck, finished, budget}` (defaults
+true/true/true/false/true), `budget {dailyUsd, monthlyUsd}` (USD or `null`, default none), `quiet {on, start, end, tz}` (HH:MM, IANA zone, may cross midnight),
 `stuckMinutes` (10), `dedupeS` (600), `maxPerHour` (12, per channel). Triggers: `approval.request`
 and `human_input.request` → *approval*; `error` and `session.end` with `failed` → *error*;
 `session.end` `completed` (main agent, not `final`) → *finished*; a session still `working` with no
-events for `stuckMinutes` → *stuck* (the Durable Object alarm, once per quiet stretch). Messages carry
+events for `stuckMinutes` → *stuck* (the Durable Object alarm, once per quiet stretch); after a batch
+with `llm.call`, today's or this month's spend (the insights route's events, `spendNow`, calendar in
+`quiet.tz`) at or past a limit → *budget* (once per day / month, key `budget:day:2026-10-19`).
+Messages carry
 `{title, body, url, tag}`; `url` is the office's `/watch` link. Telegram uses `sendMessage` (HTML,
 escaped). Web Push uses VAPID (ES256) and aes128gcm (RFC 8291); a 404/410 from the push service drops
 the subscription.
@@ -320,12 +323,17 @@ Only a running turn can be stuck: nothing fires after `session.end`, or while th
 approval or for your answer. `since` is the `seq` of the first event of the evidence, which is what
 makes "once per streak" work (`stuckKey(session, reason)`).
 
-**Where they run today.** In the browser that watches the office (owner tab or `/watch` viewer),
-because that is where thresholds and budgets are configured. The detectors are pure functions
+**Where they run, and who notifies.** The detectors run in the browser that watches the office
+(owner tab or `/watch` viewer), where thresholds and budgets are configured, and drive the banners
+and the head-scratching agent. In the browser the signals are **informational**: nothing in Overtime
+sends a Telegram message or a push for them, so nothing is notified twice. Notifications come from
+remote control's Durable Object, which needs no open tab: its own stuck timer (`stuckMinutes`
+without events) and a server-side budget check that runs the same pure `spendNow()` over the events
+of `GET /api/ext/runs/:id/insights` (`worker/src/insights.ts`). Saving budgets in *Insights → Alerts*
+on a paired device also sets `notify.budget` on the office. The detectors are pure functions
 (`detectStuck(events, now, thresholds)` in `src/insights/stuck.ts`, `budgetStatus(spend, cfg)` and
-`spendNow(events)` in `src/insights/budget.ts` / `aggregate.ts`) with no DOM, so a server-side
-notifier can run the same code: call them from `ExtOffice.ingest` after storing a batch (with the
-session's events from SQLite) and from the office's alarm for `idle`, then dedupe with `SignalGate`.
+`spendNow(events)` in `src/insights/budget.ts` / `aggregate.ts`), so a custom notifier can subscribe
+with `onSignal()` or the `overtime:signal` DOM event.
 
 ## Generic example
 

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Overtime: watch your own Hermes agent work live in a pixel-art office (tool calls, subagents, approvals, cost), or give a task to a built-in team of AI agents that builds a site or opens a pull request.",
   "license": "MIT",
-  "author": "vhmns \u00b7 Kode Kecil",
+  "author": "vhmns · Kode Kecil",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:ui": "vite",
@@ -22,7 +22,8 @@
     "deploy": "npm run build && wrangler deploy",
     "live:smoke": "vite-node scripts/live-smoke.ts",
     "selfhost": "node scripts/selfhost.mjs",
-    "test:selfhost": "node scripts/selfhost-smoke.mjs"
+    "test:selfhost": "node scripts/selfhost-smoke.mjs",
+    "vapid": "node scripts/vapid-keys.mjs"
   },
   "dependencies": {
     "parse5": "^7.3.0"

@@ -6,6 +6,10 @@ Overtime is an open-source web app. Connect the [Hermes Agent](https://hermes-ag
 
 Overtime also has its own **built-in team** of five agents (PM, Research, Coder, Reviewer, Ops) that can build a static site or fix a bug in your GitHub repo and open a pull request, with approval gates you control.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/vhmns14/overtime) &nbsp; or self-host with Docker: [docs/SELF_HOST.md](docs/SELF_HOST.md)
+
+**What's in it:** a live office per Hermes install that sleeps when Hermes is idle and wakes on the next session · a bookshelf of Hermes' skills and a memory cabinet · several Hermes installs as floors of one building · replay, timeline, session summaries, a cost dashboard with budgets and stuck detection · opt-in remote control: approve from your phone, send tasks, Telegram and Web Push alerts · a read-only viewer link for anyone.
+
 The first visit opens on **Connect Hermes**. No server yet? Pick **Demo · a recorded Hermes session**: a real session (plan, a subagent, a failing test fixed, an approval in Hermes' CLI) replayed through the same pipeline, fully offline.
 
 ![A real Hermes 0.19 run (gpt-4o-mini, metadata privacy) in the office](docs/hermes-real-run-desktop.png)
@@ -38,10 +42,12 @@ The first visit opens on **Connect Hermes**. No server yet? Pick **Demo · a rec
    EOF
    ```
 
+   Or in one line: `curl -fsSL https://<your-overtime>/hermes-overtime/install.sh | sh -s -- --url <office url> --token ot_ing_…` (or `--server https://<your-overtime> --create`), which installs, enables and tests the plugin.
+
 3. Restart Hermes (a new `hermes` session, or restart the gateway) and check: `hermes overtime test` sends a test session; `/overtime` inside a session prints the office's viewer link.
 4. Run anything in Hermes. The screen leaves *Waiting for the first event…* and the office comes alive. With **Follow new sessions** on, it jumps to each new session; the picker shows older ones.
 
-**Hermes must be able to reach Overtime.** On one machine, `npm run dev` is enough. For a Hermes on a VPS, deploy Overtime to your Cloudflare account (`npm run deploy`) or expose your local copy through a tunnel.
+**Hermes must be able to reach Overtime.** On one machine, `npm run dev` is enough. For a Hermes on a VPS, deploy Overtime to your Cloudflare account (the button above, or `npm run deploy`), or self-host it with Docker behind HTTPS or a tunnel: [docs/SELF_HOST.md](docs/SELF_HOST.md).
 
 **No code at all:** Hermes builds with outbound webhooks (`hooks.outbound`) can POST every hook to Overtime themselves, HMAC-signed (`X-Hermes-Signature-256`). The Connect screen's **Webhooks** tab gives you the `config.yaml` block and the secret. Hermes 0.19.0 on PyPI does not have outbound webhooks yet; the plugin works there.
 
@@ -90,7 +96,7 @@ Hermes keeps asking in its own UI the whole time; the first answer wins (an answ
 
 **Send tasks to Hermes.** A task box under the panel sends a prompt after a confirmation step. The plugin, running inside `hermes gateway`, long-polls your office's queue, claims one task at a time, checks its signature and a local allowlist (`OVERTIME_REMOTE_COMMANDS`, default `run,stop`; prompts starting with `/` are refused unless `OVERTIME_ALLOW_SLASH=1`), and starts it through **Hermes' own API server**: `POST /v1/runs` (see Hermes' [programmatic integration](https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration)). It reports *started* and *done/failed* back; **Stop** maps to `POST /v1/runs/{id}/stop`. A claimed task that is never confirmed as started is marked *lost* and never re-run. Hermes plugins have no API to inject a prompt into an existing chat, so tasks start a new API-server run (its own session, which the office follows).
 
-**Notifications** when an approval or input is waiting, on an error or failed session, when a working session goes quiet for N minutes (*stuck*, checked by the office's Durable Object alarm), and optionally when a session finishes. Channels:
+**Notifications** when an approval or input is waiting, on an error or failed session, when a working session goes quiet for N minutes (*stuck*, checked by the office's Durable Object alarm), past a daily or monthly **budget** (checked by the office on every model call, once per period), and optionally when a session finishes. Insights' browser-side `session.stuck` / `budget.exceeded` signals are informational and never send a second message. Channels:
 - **Telegram** with your own bot (token from @BotFather + your chat id). The token is stored encrypted (AES-GCM, key from `OVERTIME_SECRET_KEY` if set, otherwise a per-office key) and never shown again. Self-hosters can use Worker secrets instead (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, allowed per office with `OVERTIME_TELEGRAM_OFFICES`).
 - **Web Push** (VAPID + aes128gcm, no dependencies; works in Chrome on Android with the tab closed). VAPID keys are generated per office, or set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`. Pushes only go to browser push services.
 
@@ -151,9 +157,26 @@ A replay exported straight from the browser (GIF, demo session at 16x, caption o
 - **Cost dashboard**: cost or tokens per day (14 or 30 days, local time), per model and per session, a token breakdown, today and this month. For a real office the numbers come from the Worker's `GET /api/ext/runs/:id/insights` (the newest 20,000 model calls of the whole office), not just what the tab loaded. The demo adds clearly labelled sample history so the charts have something to show.
 - **Budgets** per day and per month: an orange banner from 80 %, a red one past the limit, and a `budget.exceeded` signal. Overtime never stops Hermes.
 - **Stuck detection** with thresholds you can change (*Insights → Alerts*): the same tool with the same arguments N times in a row, repeated failures, no events for X minutes while a turn runs, a cost spike. The character who was doing it scratches its head under a red "?", a banner says why, and a `session.stuck` signal fires once per streak. Nothing fires while Hermes waits for your approval.
-- **Signals for notifications**: `session.stuck` and `budget.exceeded` go through `onSignal()` (`src/insights/signals.ts`) and a `overtime:signal` DOM event, so a notifier (Telegram, web push) can hook in. Fields and rules: [docs/EVENTS.md → Insight signals](docs/EVENTS.md#insight-signals-for-notifications).
+- **Signals**: `session.stuck` and `budget.exceeded` (banners in the browser; Telegram/push come from *Remote control*, server-side, and budgets saved here on a paired device are copied there) go through `onSignal()` (`src/insights/signals.ts`) and a `overtime:signal` DOM event, so a notifier (Telegram, web push) can hook in. Fields and rules: [docs/EVENTS.md → Insight signals](docs/EVENTS.md#insight-signals-for-notifications).
 
 Budgets, thresholds and the replay speed are saved in this browser (`localStorage`).
+
+## The office: idle and asleep, scoreboard, real clock, skills and memory, buildings
+
+| Idle office: lights down, everyone asleep | Bookshelf of skills, memory cabinet |
+|---|---|
+| ![Asleep](docs/office-asleep-desktop.png) | ![Library](docs/office-library-hover-desktop.png) |
+| **A building: one floor per Hermes install** | **Inside a floor, with the elevator panel** |
+| ![Building](docs/building-desktop.png) | ![Floor](docs/building-floor-desktop.png) |
+
+<p align="center"><img src="docs/office-asleep-mobile.png" width="240" alt="Phone: office asleep"> <img src="docs/office-library-mobile.png" width="240" alt="Phone: Library panel"> <img src="docs/building-mobile.png" width="240" alt="Phone: building"></p>
+
+- **It reacts to activity.** After 2 minutes without events the lamps dim and monitors go dark; after 10 everyone dozes off at their desk (one on the bench). The next session wakes them with a stretch. Each finished turn gets a small cheer, a failed one a slump. Thresholds: `?dim=` / `?sleep=` in the URL.
+- **Scoreboard** on the wall: today's sessions, succeeded and failed (the built-in team's runs on its own surface).
+- **Real clock and daylight.** The wall clock shows your local time and the window follows the day, from dawn to night rain.
+- **Skills and memory.** Every Hermes skill (`skill_manage` / `skill_view`, or `on_skill_lifecycle` on newer Hermes) is a book on the shelf; edits add versions (hover for them). The filing cabinet glows when Hermes writes or recalls memory. **Library** lists every skill with its versions and the memory counters, names only, never contents.
+- **Buildings.** Group several Hermes installs: **Building** turns your office into floor 1, **Add another Hermes** creates a floor with its own office, tokens and a one-line installer. The cross-section shows which floors are working right now; click one (or use the elevator panel inside) to ride in. A read-only building link shows every floor. Without a Hermes yet, the recorded demo opens a sample building (also in `preview.html`).
+- **Self-hosting.** `docker compose up -d` runs the same Worker and SQLite Durable Objects in `workerd`, persisted to a volume, no Cloudflare account. `install.sh` installs and connects the plugin on a Hermes machine in one line. Step-by-step guide (written so an agent can follow it): [docs/SELF_HOST.md](docs/SELF_HOST.md).
 
 ---
 
@@ -220,7 +243,7 @@ Five agents take a task like *"Build a landing page for Kopi Senja"* and turn it
 - **Phone layout.** The office sits on top with a bottom sheet below. Approvals open as a full-screen card with the agent's portrait, a diff snippet and the spend so far.
 - **Files view.** File tree and code viewer, a version picker (Coder v1, v2…), a line diff against the previous iteration, a sandboxed preview iframe and a ZIP download.
 - **Run history** (last 8 runs) is saved in `localStorage`. Settings live there too. It degrades to memory when storage is blocked.
-- **Single-file offline build.** `npm run build:preview` produces `preview.html`: one inline classic `<script>` that runs all three demos (the recorded Hermes session first) inside a sandboxed iframe with no network and no storage. Insights work there too (replay, timeline, summary, costs; a GIF export shows inline since the sandbox blocks downloads).
+- **Single-file offline build.** `npm run build:preview` produces `preview.html`: one inline classic `<script>` that runs all three demos (the recorded Hermes session first) inside a sandboxed iframe with no network and no storage. Insights work there too (replay, timeline, summary, costs; a GIF export shows inline since the sandbox blocks downloads), and so do the bookshelf, the Library and a sample building.
 
 ## Quick start
 
@@ -237,12 +260,15 @@ Other scripts:
 | `npm run build` | Type-checks, then builds the app into `dist/` (served by the Worker's static assets) |
 | `npm run dev:worker` | Serves `dist/` and the Worker together on :8787, the same way production does |
 | `npm test` | Vitest unit tests: external-agent schema, redaction, Hermes payload mapping, HMAC verification, token auth, rate and size limits, the office Durable Object on real SQLite, the office reducer (roles, subagents, approvals, cost, sessions; a captured real Hermes run and the recorded demo); insights (session stats, cost per day/model/session with time zones, stuck heuristics, budgets and signal dedupe, replay timing at every speed, timeline filters and redaction, the GIF encoder round-trip, the insights endpoint); orchestrator (both modes), tool calls, checks, budget cap, approvals, injection safety, mocked GitHub (tree, patches, branch, commit, PR, error paths, token redaction), mocked LLM (JSON repair, tool calling fallback, 429 backoff, streaming), the smoke script |
-| `npm run test:plugin` | pytest for the Hermes plugin: observer-only registration, privacy trimming, batching, timeouts, failure isolation; remote control (signature checks, timeout/error fallback, local answer first, task allowlist, API-server calls) |
+| `npm run test:plugin` | pytest for the Hermes plugin: observer-only registration, privacy trimming, batching, timeouts, failure isolation; remote control (signature checks, timeout/error fallback, local answer first, task allowlist, API-server calls); skill and memory events. Passes with and without hermes-agent 0.19 importable |
 | `npm run test:e2e:control` | Playwright for remote control on its own port (:8931) with a mock Telegram API on :8932 (`playwright.control.config.ts`) |
-| `npm run test:e2e` | Playwright at 390×844 and 1440×900 (Connect Hermes flow, live events, watch view, the demos, insights: replay controls, GIF/WebM export, timeline filter + jump, summary, cost dashboard + budget, stuck banner; 0 console errors). Run `npm run build` and `npm run build:preview` first. `OT_PORT=8797` runs it on another port |
+| `npm run test:e2e` | Playwright at 390×844 and 1440×900 (Connect Hermes flow, live events, watch view, the demos, insights: replay controls, GIF/WebM export, timeline filter + jump, summary, cost dashboard + budget, stuck banner; the office going to sleep and waking, the library, buildings and the elevator; 0 console errors). Run `npm run build` and `npm run build:preview` first. `OT_PORT=8797` runs it on another port |
 | `npm run build:preview` | Builds `preview.html` (all demos, fully offline) and prints its sha256 |
 | `npm run live:smoke` | A real end-to-end run from the terminal against your provider (and, optionally, your repo). See *Live smoke test* |
-| `npm run atlas` | Rebuilds the sprite atlas and office background from `art/raw/` |
+| `npm run atlas` | Rebuilds the sprite atlas, office background and props atlas from `art/raw/` |
+| `npm run selfhost` | Serves `dist/` + the Worker in workerd with state in `OVERTIME_DATA` (the Docker entrypoint) |
+| `npm run test:selfhost` | Self-host smoke test: offices, buildings and events survive a restart |
+| `npm run vapid` | Prints a VAPID key pair for Web Push (optional) |
 | `npm run deploy` | `wrangler deploy` to your own Cloudflare account. Nothing deploys unless you run it |
 
 ## Bring your own key
@@ -319,10 +345,14 @@ src/
   insights/          replay clock, timeline, session stats + summary card, cost aggregations, budgets, stuck heuristics, signals (pure);
                      GIF encoder, frame composer + MediaRecorder export, SVG charts, and the Insights UI (ui.ts)
   demo/              recorded Hermes session; DemoLLM: recorded team runs (Kopi Senja; warung-cart bug fix → PR), FakeGitHub, mock OpenAI server
-  office/            canvas renderer: pre-rendered isometric room + sprite atlas, nav graph, lights, rain
+  office/            canvas renderer: pre-rendered isometric room + sprite atlas, nav graph, lights, rain; ambience (sleep/wake,
+                     scoreboard, clock, daylight, bookshelf, cabinet) from the props atlas
+  building/          buildings of offices: model, cross-section view, controller (floors, elevator, installer line)
   app/               UI controller (vanilla TS), Hermes connect/live/watch (hermes.ts), settings, deploy/preview/GitHub
-worker/src/          Cloudflare Worker + SQLite Durable Objects: one per preview, one per external-agent office (ext.ts)
-integrations/hermes-overtime/   the Hermes plugin (plugin.yaml + __init__.py) and its pytest suite
+worker/src/          Cloudflare Worker + SQLite Durable Objects: one per preview, one per external-agent office (ext.ts, with
+                     remote control on top in control.ts), one per building (building.ts); insights.ts for the cost route
+integrations/hermes-overtime/   the Hermes plugin (plugin.yaml + __init__.py, opt-in overtime_control.py), install.sh, pytest suite
+Dockerfile, docker-compose.yml, scripts/selfhost.mjs   self-hosting in workerd
 art/raw/             generated source art; scripts/build-atlas.py slices + packs it
 ```
 
@@ -343,7 +373,8 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 | `POST /api/ext/hermes/webhook/:id` | Hermes outbound webhooks, HMAC-SHA256 (`X-Hermes-Signature-256`), 5-minute replay window, delivery dedupe |
 | `GET /api/ext/runs/:id/events` · `/stream` | Replay for late viewers · live WebSocket (hibernatable). View or ingest token |
 | `GET /api/ext/runs/:id/insights` | Model calls and session boundaries of the whole office for the cost dashboard and budgets. View or ingest token |
-| `GET /hermes-overtime/*` | The plugin files, served by your own deployment for the Connect screen's curl lines |
+| `POST /api/ext/buildings` · `/api/ext/buildings/:id[/floors…]` | Buildings: create (admin `ot_bld_…` + view `ot_bview_…` tokens), list floors with live stats, add a floor (an existing office, or a new one with its installer line), remove a floor |
+| `GET /hermes-overtime/*` | The plugin files and `install.sh`, served by your own deployment for the Connect screen's curl lines |
 | `/api/ext/runs/:id/control/*` | Remote control (opt-in): pairing and devices, policy, approvals (the plugin registers and long-polls with the ingest token; paired devices decide), the task queue (claim/ack), notifications, push subscriptions, the signed audit log. See [docs/EVENTS.md](docs/EVENTS.md#remote-control-opt-in) |
 
 **Why a custom canvas renderer instead of Phaser or Pixi?** The office is one pre-rendered isometric room with a handful of sprites, glows and rain. A ~600-line renderer covers that, keeps the bundle around 260 KB and makes the single-file classic-script preview possible. Bundled game engines don't survive that preview's constraints.
@@ -372,11 +403,11 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 - More task types: small tools with tests
 - Headless-browser checks (Lighthouse-style performance, real rendered contrast, screenshot diffs)
 - Agents that can ask each other questions, plus a "standup" summary at the meeting table
-- Day/night cycle, more office layouts, unlockable decor as runs complete
+- More office layouts, unlockable decor as runs complete
 - An approval-transport adapter for Hermes builds newer than 0.19.0 (`ctx.register_approval_transport`, which would also cover CLI sessions), Approve/Deny buttons inside the Telegram message, streaming Hermes' replies into speech bubbles
 - Adapters for more agents on the generic events API (Claude Code hooks, OpenAI Agents SDK tracing)
 - Shareable read-only replays of built-in team runs (external-agent offices already have them)
-- Server-side stuck/budget checks in the office Durable Object, so notifications work with no browser open (the detectors are already pure)
+- Server-side versions of the remaining stuck heuristics (repeated tool, repeated failures, cost spikes) for notifications; today the server checks silence and budgets
 
 ## License
 

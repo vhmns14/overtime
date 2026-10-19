@@ -177,7 +177,7 @@ export class App {
       officeAccess: () => this.watch ?? (this.hermes.creds ? { id: this.hermes.creds.runId, token: this.hermes.creds.viewToken } : null),
     });
     this.insights.mount();
-    document.addEventListener("overtime:surface", (e) => { this.building?.close(); this.watch = this.pageWatch; this.applyTarget(String((e as CustomEvent).detail)); this.enterSurface(); });
+    document.addEventListener("overtime:surface", (e) => { this.building?.close(); if (this.building) this.building.demo = false; this.watch = this.pageWatch; this.applyTarget(String((e as CustomEvent).detail)); this.enterSurface(); });
     if (this.props) this.mountBuilding();
     this.renderSteps(Object.fromEntries(STEPS.map((s) => [s.id, { state: "pending" }])) as Record<StepId, { state: StepState; pct?: number }>);
     this.renderLog([]);
@@ -199,7 +199,10 @@ export class App {
       props: this.props!,
       ownOffice: () => this.ownOffice(),
       enterOffice: (floor, creds) => {
-        if (creds) {
+        if (floor.office === "demo") {
+          this.watch = null;
+          this.s.surface = "demo-hermes";
+        } else if (creds) {
           this.watch = null;
           this.s.surface = "hermes";
           this.hermes.creds = creds;
@@ -207,6 +210,7 @@ export class App {
         this.enterSurface();
       },
       leave: () => {
+        if (this.building?.demo) { this.building.demo = false; this.s.surface = "demo-hermes"; }
         this.watch = this.pageWatch;
         this.hermes.creds = this.ownOffice();
         if (this.buildingLink) history.replaceState(null, "", "/");
@@ -220,6 +224,7 @@ export class App {
       const b = this.building!;
       if (b.inBuilding) void b.open();
       else if (this.ownOffice()) void b.create();
+      else if (__PREVIEW__ || this.s.surface === "demo-hermes") void b.openDemo();
       else this.toast("Connect a Hermes first: it becomes floor 1 of your building.");
     };
     for (const host of [document.querySelector(".panel-nav"), document.querySelector(".bar-actions")]) {

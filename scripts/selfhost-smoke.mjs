@@ -51,6 +51,10 @@ const fl = await json(await fetch(`${base}/api/ext/buildings/${b.buildingId}/flo
 check(fl.status === 201, `office moved into building ${b.buildingId} as floor ${fl.body.floor}`);
 const inst = await fetch(`${base}/hermes-overtime/install.sh`);
 check(inst.ok && (await inst.text()).startsWith("#!/bin/sh"), "installer served at /hermes-overtime/install.sh");
+const ctlPy = await fetch(`${base}/hermes-overtime/overtime_control.py`);
+check(ctlPy.ok && (await ctlPy.text()).includes("resolve_gateway_approval"), "remote-control module served at /hermes-overtime/overtime_control.py");
+const en = await json(await fetch(`${base}/api/ext/runs/${o.runId}/control/enable`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${o.ingestToken}` }, body: JSON.stringify({ device: "Smoke" }) }));
+check(en.status === 201 && String(en.body.controlToken).startsWith("ot_ctl_"), "remote control enabled (first device paired with the ingest token)");
 const app = await fetch(`${base}/building/${b.buildingId}`);
 check(app.ok && /<div id="app"/.test(await app.text()), "app shell served for /building/<id>");
 

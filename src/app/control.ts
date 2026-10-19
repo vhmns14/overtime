@@ -108,6 +108,13 @@ export class ControlController {
   }
 
   get paired() { return !!this.creds && !!this.office; }
+
+  /** Insights' budgets → the office's server-side budget notifications (only on a paired device). */
+  async syncBudget(b: { dailyUsd: number | null; monthlyUsd: number | null }): Promise<boolean> {
+    if (!this.paired) return false;
+    const r = await this.api("POST", "notify", { settings: { budget: { dailyUsd: b.dailyUsd, monthlyUsd: b.monthlyUsd } } }).catch(() => ({ status: 0 }));
+    return r.status === 200;
+  }
   get canEnable() { return !!this.office?.ingestToken && !this.paired; }
 
   /** A content-free ping from the office stream: something changed. */
@@ -407,10 +414,10 @@ export class ControlController {
       ...(s.policy.remoteTasks ? ["OVERTIME_REMOTE_TASKS=1", "API_SERVER_ENABLED=true   # tasks start via POST /v1/runs", "API_SERVER_KEY=<a long random key>"] : []),
       ...(!s.policy.remoteApproval && !s.policy.remoteTasks ? ["# switch something on above first"] : []),
       "",
-      "# plus the control module next to the plugin, then restart the gateway",
+      "# plus the remote-control file next to the plugin, then restart the gateway",
       `curl -fsSL ${location.origin}/hermes-overtime/overtime_control.py -o ~/.hermes/plugins/hermes-overtime/overtime_control.py`,
     ].join("\n");
-    const trig: Record<Trigger, string> = { approval: "Approval or input waiting", error: "Error or failed session", stuck: "Looks stuck (no activity)", finished: "Session finished" };
+    const trig: Record<Trigger, string> = { approval: "Approval or input waiting", error: "Error or failed session", stuck: "Looks stuck (no activity)", finished: "Session finished", budget: "Budget exceeded" };
     const audit = this.audit;
     return `
       <p>This device is <b>${esc(me?.name ?? "paired")}</b>. Control tokens are separate from the viewer link: the viewer link can never approve anything.</p>
@@ -427,6 +434,10 @@ export class ControlController {
         <label class="field ctl-time"><span class="sr-only">From</span><input type="time" data-q="start" value="${esc(n.quiet.start)}"></label><span>to</span>
         <label class="field ctl-time"><span class="sr-only">To</span><input type="time" data-q="end" value="${esc(n.quiet.end)}"></label>
         <small>${esc(n.quiet.on ? n.quiet.tz : tz)}</small></div>
+      <div class="ctl-quiet ctl-budget"><span>Budget</span>
+        <label class="field ctl-time"><span class="sr-only">Daily budget in USD</span><input type="number" min="0" step="0.01" inputmode="decimal" data-b="dailyUsd" placeholder="per day" value="${n.budget.dailyUsd ?? ""}"></label>
+        <label class="field ctl-time"><span class="sr-only">Monthly budget in USD</span><input type="number" min="0" step="0.01" inputmode="decimal" data-b="monthlyUsd" placeholder="per month" value="${n.budget.monthlyUsd ?? ""}"></label>
+        <small>USD, checked by the office itself on every model call</small></div>
       <p>Each message links to this office's viewer. The same alert goes out at most once per ${Math.round(n.dedupeS / 60)} min, ${n.maxPerHour} per hour per channel; "stuck" means ${n.stuckMinutes} min without events in a working session.</p>
       <div class="ctl-channel">
         <b>Telegram</b> ${s.telegram.set ? `<span class="ctl-ok">connected${s.telegram.server ? " (server bot)" : ` · chat ${esc(s.telegram.chatId)} · token …${esc(s.telegram.tokenTail)}`}</span> <button type="button" class="link-btn" data-act="tg-clear">Remove</button>`
@@ -468,6 +479,7 @@ export class ControlController {
       const settings = {
         enabled: q<HTMLInputElement>('[data-n="enabled"]')!.checked,
         triggers: Object.fromEntries(TRIGGERS.map((t) => [t, q<HTMLInputElement>(`[data-trig="${t}"]`)!.checked])),
+        budget: Object.fromEntries((["dailyUsd", "monthlyUsd"] as const).map((k) => { const v = Number(q<HTMLInputElement>(`[data-b="${k}"]`)?.value); return [k, v > 0 ? v : null]; })),
         quiet: { on: q<HTMLInputElement>('[data-q="on"]')!.checked, start: q<HTMLInputElement>('[data-q="start"]')!.value || "22:00", end: q<HTMLInputElement>('[data-q="end"]')!.value || "07:00", tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" },
       };
       const tok = q<HTMLInputElement>('[data-f="tg-token"]')?.value.trim();

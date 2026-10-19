@@ -91,3 +91,13 @@ export function ago(ts: number, now = Date.now()): string {
 export function installLine(origin: string, office: string, ingestToken: string, privacy = "metadata"): string {
   return `curl -fsSL ${origin}/hermes-overtime/install.sh | sh -s -- --url ${origin}/api/ext/runs/${office}/hermes --token ${ingestToken} --privacy ${privacy}`;
 }
+
+/** An offline sample building (the recorded demo on floor 1), for preview.html and visitors without a Hermes yet. */
+export function demoFloors(now: number): Floor[] {
+  const st = (agoMs: number, working: number, sessions: number, model: string, status: string): FloorStats => ({ lastActivity: now - agoMs, events: 40 + sessions * 25, working, sessions, latest: { id: `demo-${sessions}`, status, model } });
+  return [
+    { floor: 1, office: "demo", name: "Demo · recorded Hermes session", viewToken: "", stats: st(20_000, 1, 1, "openai/gpt-4o-mini", "working") },
+    { floor: 2, office: "demo-vps", name: "Sample · VPS gateway", viewToken: "", stats: st(4 * 60_000, 0, 6, "anthropic/claude-sonnet-4", "completed") },
+    { floor: 3, office: "demo-cron", name: "Sample · nightly cron", viewToken: "", stats: st(3 * 3_600_000, 0, 14, "openai/gpt-4o-mini", "completed") },
+  ];
+}

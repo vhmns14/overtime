@@ -230,10 +230,12 @@ button { cursor: pointer; }
 @media (max-width: 760px) {
   body { background: var(--paper); }
   .app { display: flex; flex-direction: column; height: auto; min-height: 100dvh; }
-  .mobile-bar { display: flex; align-items: center; height: 58px; padding: 0 18px; background: var(--paper); }
-  .mobile-bar .mark-sm svg { height: 22px; }
-  .bar-actions { margin-left: auto; display: flex; gap: 6px; }
-  .icon-btn { padding: 5px 9px; border: 1.5px solid var(--ink); border-radius: 6px; background: var(--card); font: 600 12px var(--mono); }
+  .mobile-bar { display: flex; align-items: center; gap: 10px; height: 58px; padding: 0 14px; background: var(--paper); }
+  .mobile-bar .mark-sm { flex: 0 1 auto; min-width: 0; display: flex; }
+  .mobile-bar .mark-sm svg { height: 22px; width: auto; max-width: 100%; }
+  /* Building · Files · Insights · Settings must fit a 360 px phone without widening the page */
+  .bar-actions { margin-left: auto; display: flex; gap: 5px; flex: none; }
+  .icon-btn { padding: 5px 7px; border: 1.5px solid var(--ink); border-radius: 6px; background: var(--card); font: 600 11.5px var(--mono); }
   .office { height: 46vh; height: 46dvh; min-height: 300px; flex: none; }
   .office-chip { left: auto; right: 10px; top: auto; bottom: 30px; font-size: 10px; padding: 5px 7px; }
   .bubble { font-size: 11px; max-width: 160px; padding: 5px 7px; }

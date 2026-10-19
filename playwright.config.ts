@@ -11,6 +11,8 @@ const executablePath = process.env.PW_CHROMIUM ?? (process.env.CI ? undefined : 
 
 export default defineConfig({
   testDir: "e2e",
+  // remote control has its own config (mock Telegram API, its own port): playwright.control.config.ts
+  testIgnore: /control\.spec\.ts$/,
   timeout: 120_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
