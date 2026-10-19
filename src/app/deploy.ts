@@ -1,10 +1,22 @@
 // Ops' side effects in site mode: publish a preview to the Worker, or fall back to an in-browser preview.
 // (GitHub work lives in engine/github.ts: repo mode opens a pull request, it never pushes to a branch.)
 
+/** One random write key per preview: the first upload sets it, only this tab can replace the preview later. */
+const previewKeys = new Map<string, string>();
+export function previewKey(runId: string): string {
+  let k = previewKeys.get(runId);
+  if (!k) {
+    const b = crypto.getRandomValues(new Uint8Array(24));
+    k = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+    previewKeys.set(runId, k);
+  }
+  return k;
+}
+
 export async function deployToWorker(runId: string, task: string, files: Record<string, string>): Promise<{ url: string; local: boolean }> {
   if (__PREVIEW__) return { url: "", local: true }; // single-file preview: no network at all
   try {
-    const res = await fetch(`/api/runs/${runId}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ task, files }) });
+    const res = await fetch(`/api/runs/${runId}`, { method: "PUT", headers: { "content-type": "application/json", "x-ot-preview-key": previewKey(runId) }, body: JSON.stringify({ task, files }) });
     if (!res.ok) throw new Error(String(res.status));
     const data = (await res.json()) as { url: string };
     return { url: data.url, local: false };

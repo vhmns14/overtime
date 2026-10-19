@@ -35,12 +35,24 @@ export function safePath(p: string): string | null {
 
 /** Hosts the proxy and fetcher refuse: loopback, private ranges, link-local, metadata. */
 export function isPrivateHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
-  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.)/.test(h)) return true;
+  let h = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".home.arpa")) return true;
+  // public wildcard-DNS names that resolve to the address written in them (127.0.0.1.nip.io, …)
+  if (/(^|\.)(nip\.io|sslip\.io|xip\.io|localtest\.me|lvh\.me|vcap\.me)$/.test(h)) return true;
+  if (h.includes(":")) {
+    if (h === "::" || h === "::1" || /^(fc|fd|fe[89ab])/.test(h)) return true;
+    // IPv4-mapped / -compatible / NAT64 addresses carry an IPv4 address: judge that one
+    const v4 = h.match(/^(?:::ffff:|::|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+    const hex = h.match(/^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (v4) h = v4;
+    else if (hex) { const a = parseInt(hex[1], 16), b = parseInt(hex[2], 16); h = `${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`; }
+    else return false;
+  }
+  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.|255\.255\.255\.255$)/.test(h)) return true;
   const m = h.match(/^172\.(\d+)\./);
   if (m && +m[1] >= 16 && +m[1] <= 31) return true;
-  if (/^(::1|fc|fd|fe80)/.test(h) && h.includes(":")) return true;
+  const cg = h.match(/^100\.(\d+)\./); // carrier-grade NAT, also used by Tailscale
+  if (cg && +cg[1] >= 64 && +cg[1] <= 127) return true;
   if (h === "metadata.google.internal") return true;
   return false;
 }

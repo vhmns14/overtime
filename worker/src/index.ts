@@ -25,6 +25,7 @@ export { ControlOffice as ExtOffice } from "./control";
 import { handleBuilding } from "./building";
 export { ExtBuilding } from "./building";
 import { RUN_ID, MAX_FILES, MAX_TOTAL, PREVIEW_CSP, TYPES, safePath, isPrivateHost, json, CORS, htmlToText, ghRouteAllowed, ghBodyAllowed } from "./lib";
+import { sha256Hex } from "../../src/ext/auth";
 
 async function proxyLLM(req: Request, env: Env): Promise<Response> {
   const base = req.headers.get("x-ot-base-url") ?? "";
@@ -42,7 +43,9 @@ async function proxyLLM(req: Request, env: Env): Promise<Response> {
   const auth = req.headers.get("authorization");
   if (auth) headers.authorization = auth; // forwarded as-is, never stored, never logged
   if (u.hostname.endsWith("openrouter.ai")) { headers["http-referer"] = "https://github.com/vhmns14/overtime"; headers["x-title"] = "Overtime"; }
-  const upstream = await fetch(u.toString().replace(/\/+$/, "") + "/chat/completions", { method: "POST", headers, body });
+  // never follow a redirect with the user's key in the Authorization header
+  const upstream = await fetch(u.toString().replace(/\/+$/, "") + "/chat/completions", { method: "POST", headers, body, redirect: "manual" });
+  if (upstream.status >= 300 && upstream.status < 400) return json({ error: `the LLM endpoint redirected (HTTP ${upstream.status}); use its final URL as the base URL` }, 502, CORS);
   return new Response(upstream.body, { status: upstream.status, headers: { "content-type": upstream.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...CORS } });
 }
 
@@ -91,7 +94,18 @@ async function fetchPage(url: string): Promise<Response> {
     return json({ error: "invalid url" }, 400);
   }
   if (!/^https?:$/.test(u.protocol) || isPrivateHost(u.hostname)) return json({ error: "only public http(s) pages can be fetched" }, 400);
-  const res = await fetch(u.toString(), { headers: { "user-agent": "OvertimeResearch/0.1 (+https://github.com/vhmns14/overtime)", accept: "text/html,text/plain;q=0.9" }, redirect: "follow" });
+  // redirects are followed by hand so every hop is checked again: a public page must not be able to
+  // bounce the fetcher to 127.0.0.1, a metadata endpoint or the self-host machine's LAN
+  let res: Response | null = null;
+  for (let hop = 0; hop <= 5; hop++) {
+    const r = await fetch(u.toString(), { headers: { "user-agent": "OvertimeResearch/0.1 (+https://github.com/vhmns14/overtime)", accept: "text/html,text/plain;q=0.9" }, redirect: "manual" });
+    if (r.status < 300 || r.status >= 400) { res = r; break; }
+    const loc = r.headers.get("location");
+    if (!loc || hop === 5) return json({ error: "too many redirects" }, 502);
+    try { u = new URL(loc, u); } catch { return json({ error: "bad redirect" }, 502); }
+    if (!/^https?:$/.test(u.protocol) || isPrivateHost(u.hostname)) return json({ error: "the page redirects to a private address" }, 400);
+  }
+  if (!res) return json({ error: "too many redirects" }, 502);
   if (!res.ok) return json({ error: `upstream ${res.status}` }, 502);
   const type = res.headers.get("content-type") ?? "";
   if (!/text\/(html|plain)|application\/xhtml/.test(type)) return json({ error: `unsupported content-type ${type}` }, 415);
@@ -110,7 +124,7 @@ async function fetchPage(url: string): Promise<Response> {
 }
 
 interface PreviewRPC {
-  put(id: string, task: string, files: Record<string, string>, ttlDays: number): Promise<unknown>;
+  put(id: string, task: string, files: Record<string, string>, ttlDays: number, keyHash?: string): Promise<{ error?: string } & Record<string, unknown>>;
   get(path: string): Promise<string | null>;
   meta(): Promise<unknown>;
 }
@@ -133,6 +147,9 @@ export default {
         if (!RUN_ID.test(id)) return json({ error: "invalid run id" }, 400);
         const stub = env.PREVIEWS.get(env.PREVIEWS.idFromName(id)) as unknown as PreviewRPC;
         if (req.method === "PUT") {
+          // a preview URL is public (/p/<id>/): its id must not be enough to replace what it serves
+          const key = req.headers.get("x-ot-preview-key") ?? "";
+          if (!/^[\w-]{32,128}$/.test(key)) return json({ error: "x-ot-preview-key (32+ random characters) is required" }, 401);
           let body: { task?: string; files?: Record<string, string> };
           try {
             body = await req.json();
@@ -150,7 +167,8 @@ export default {
           const n = Object.keys(files).length;
           if (!n || n > MAX_FILES || total > MAX_TOTAL) return json({ error: "too many files or too large" }, 413);
           if (!files["index.html"]) return json({ error: "index.html is required" }, 400);
-          await stub.put(id, String(body.task ?? "").slice(0, 300), files, Number(env.PREVIEW_TTL_DAYS ?? 7));
+          const put = await stub.put(id, String(body.task ?? "").slice(0, 300), files, Number(env.PREVIEW_TTL_DAYS ?? 7), await sha256Hex(key));
+          if (put.error) return json({ error: put.error }, 403);
           return json({ ok: true, url: `/p/${id}/`, files: n });
         }
         if (req.method === "GET") return json(await stub.meta());
@@ -194,8 +212,11 @@ export class PreviewStore extends DurableObject<Env> {
     });
   }
 
-  async put(id: string, task: string, files: Record<string, string>, ttlDays: number) {
+  async put(id: string, task: string, files: Record<string, string>, ttlDays: number, keyHash?: string) {
     const sql = this.ctx.storage.sql;
+    const owner = sql.exec<{ v: string }>("SELECT v FROM meta WHERE k = 'key'").toArray()[0]?.v;
+    if (owner && owner !== keyHash) return { error: "this preview belongs to another run; only the tab that published it can replace it" };
+    if (!owner && keyHash) sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('key', ?)", keyHash);
     sql.exec("DELETE FROM files");
     for (const [p, c] of Object.entries(files)) sql.exec("INSERT INTO files (path, content) VALUES (?, ?)", p, c);
     const meta = { id, task, files: Object.keys(files).length, bytes: Object.values(files).reduce((n, c) => n + c.length, 0), updatedAt: Date.now() };

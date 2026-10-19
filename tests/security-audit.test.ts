@@ -248,3 +248,64 @@ describe("markdown export", () => {
     for (const l of md.split("\n").filter((x) => x.includes("`"))) expect((l.match(/(?<!\\)`/g) ?? []).length % 2).toBe(0);
   });
 });
+
+describe("Worker proxies and previews", () => {
+  const load = async () => {
+    const mod = await import("../worker/src/index");
+    const previews = fakeNamespace((ctx) => new mod.PreviewStore(ctx as never, {} as never));
+    const wenv = { ...env, PREVIEWS: previews as never, ASSETS: { fetch: async () => new Response("asset") } } as never;
+    return (path: string, init?: RequestInit) => mod.default.fetch(new Request(ORIGIN + path, init), wenv);
+  };
+
+  it("SSRF: private, mapped-IPv6, CGNAT and wildcard-DNS hosts are refused", async () => {
+    const { isPrivateHost } = await import("../worker/src/lib");
+    for (const h of ["[::ffff:127.0.0.1]", "[::ffff:7f00:1]", "[::ffff:a9fe:a9fe]", "[::]", "[64:ff9b::10.0.0.1]", "100.100.100.100", "127.0.0.1.nip.io", "10.0.0.1.sslip.io", "localtest.me", "router.home.arpa", "localhost."]) expect(isPrivateHost(h), h).toBe(true);
+    for (const h of ["api.openai.com", "[2606:4700::1111]", "100.20.0.1", "example.com"]) expect(isPrivateHost(h), h).toBe(false);
+  });
+
+  it("SSRF: the page fetcher re-checks every redirect hop", async () => {
+    const call = await load();
+    const seen: string[] = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (u: string | URL | Request) => {
+      const url = String(u instanceof Request ? u.url : u);
+      seen.push(url);
+      if (url.startsWith("https://public.example/")) return new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" } });
+      return new Response("<title>secret</title>metadata", { headers: { "content-type": "text/html" } });
+    }) as typeof fetch;
+    try {
+      const r = await call(`/api/fetch?url=${encodeURIComponent("https://public.example/x")}`);
+      expect(r.status).toBe(400);
+      expect(seen).toEqual(["https://public.example/x"]);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it("the LLM proxy never follows a redirect with the user's key", async () => {
+    const call = await load();
+    const real = globalThis.fetch;
+    const inits: RequestInit[] = [];
+    globalThis.fetch = (async (_u: unknown, init: RequestInit) => { inits.push(init); return new Response(null, { status: 307, headers: { location: "https://evil.example/steal" } }); }) as typeof fetch;
+    try {
+      const r = await call("/api/llm", { method: "POST", headers: { "x-ot-base-url": "https://api.example.com/v1", authorization: "Bearer sk-test-abcdefghijklmnop" }, body: "{}" });
+      expect(r.status).toBe(502);
+      expect(inits[0].redirect).toBe("manual");
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it("IDOR: a public preview id is not enough to replace the preview", async () => {
+    const call = await load();
+    const files = { "index.html": "<h1>mine</h1>" };
+    const put = (key: string | null, html = "<h1>mine</h1>") => call("/api/runs/run-abc123-xyz", { method: "PUT", headers: { "content-type": "application/json", ...(key ? { "x-ot-preview-key": key } : {}) }, body: JSON.stringify({ task: "t", files: { ...files, "index.html": html } }) });
+    const owner = "k".repeat(48);
+    expect((await put(owner)).status).toBe(200);
+    expect((await put(null, "<h1>defaced</h1>")).status).toBe(401);
+    expect((await put("e".repeat(48), "<h1>defaced</h1>")).status).toBe(403);
+    expect(await (await call("/p/run-abc123-xyz/")).text()).toBe("<h1>mine</h1>");
+    expect((await put(owner, "<h1>v2</h1>")).status).toBe(200); // the owner can re-deploy
+    expect(await (await call("/p/run-abc123-xyz/")).text()).toBe("<h1>v2</h1>");
+  });
+});
