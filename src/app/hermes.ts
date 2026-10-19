@@ -70,6 +70,12 @@ export class HermesController {
   rules: RoleRule[];
   /** opt-in remote control: approvals, tasks, notifications (src/app/control.ts) */
   control: ControlController;
+  /** raw events in arrival order (insights: replay, timeline, summary, costs); capped */
+  events: ExtEvent[] = [];
+  /** called after every ingested event, and with null when the office is reset */
+  listeners = new Set<(e: ExtEvent | null, session: string | null) => void>();
+  /** while insights replays a session, live events update state only: no scene, no panel */
+  suspended = false;
 
   constructor(private host: HermesHost) {
     const saved = store.getJSON<RoleRule[] | null>(RULES_KEY, null);
@@ -92,6 +98,7 @@ export class HermesController {
     this.host.office.reset();
     this.st = newOffice(this.rules);
     this.shown = null;
+    this.resetEvents();
     if (kind === "watch" && watch) {
       this.watch = watch;
       this.mode = "watch";
@@ -104,6 +111,11 @@ export class HermesController {
     } else this.mode = "connect";
     this.control.attach(this.mode === "watch" && watch ? { id: watch.id, viewToken: watch.token } : (this.mode === "waiting" && this.creds) ? { id: this.creds.runId, viewToken: this.creds.viewToken, ingestToken: this.creds.ingestToken } : null);
     this.render();
+  }
+
+  private resetEvents() {
+    this.events = [];
+    for (const l of this.listeners) l(null, null);
   }
 
   leave() {
@@ -150,6 +162,7 @@ export class HermesController {
     this.control.attach(null);
     this.st = newOffice(this.rules);
     this.shown = null;
+    this.resetEvents();
     this.mode = "connect";
     this.host.office.reset();
     this.host.closeOverlay("hermes");
@@ -257,6 +270,8 @@ export class HermesController {
   ingest(e: ExtEvent) {
     if (e.seq && e.seq <= this.st.lastSeq) return;
     const { session, effects } = applyEvent(this.st, e);
+    this.events.push(e);
+    if (this.events.length > 20_000) this.events.splice(0, this.events.length - 20_000);
     if (this.mode === "waiting" && this.live) { this.mode = "live"; this.host.closeOverlay("hermes"); }
     const newSession = effects.some((f) => f.k === "session");
     if (!this.shown || !this.st.sessions[this.shown] || (this.follow && newSession && session !== this.shown)) {
@@ -264,11 +279,13 @@ export class HermesController {
       this.shown = session;
       if (switching && this.live) this.syncScene();
     }
-    if (session === this.shown && this.live) for (const f of effects) this.effect(f);
+    if (session === this.shown && this.live && !this.suspended) for (const f of effects) this.effect(f);
+    for (const l of this.listeners) l(e, session);
   }
 
   /** Re-draws the office from the shown session's state (after replay or a session switch). */
   syncScene() {
+    if (this.suspended) return;
     this.gen++;
     const o = this.host.office;
     o.reset();
@@ -329,6 +346,7 @@ export class HermesController {
     this.host.office.reset();
     this.st = newOffice(this.rules);
     this.shown = null;
+    this.resetEvents();
     this.live = true;
     this.demoRunning = true;
     const script = hermesDemoScript();
@@ -372,6 +390,7 @@ export class HermesController {
   }
 
   render() {
+    if (this.suspended) return;
     const box = $("#hermes-box");
     if (!box) return;
     const s = this.session;

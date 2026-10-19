@@ -49,6 +49,7 @@ export class Office {
   private tickets: Ticket[] = [];
   private prNote: string | null = null;
   private celebrateUntil: Partial<Record<Role, number>> = {};
+  private stuck = new Set<Role>();
   private raf = 0;
   private last = 0;
   private flashUntil = 0;
@@ -322,7 +323,25 @@ export class Office {
     void this.sit(role);
   }
 
+  /** A stuck agent (insights' stuck detection) scratches its head under a red "?"; false clears it. */
+  setStuck(role: Role, on: boolean) {
+    if (on) this.stuck.add(role);
+    else this.stuck.delete(role);
+    const a = this.actors[role];
+    a.el.classList.toggle("is-stuck", on);
+    let q = a.el.querySelector<HTMLElement>(".qmark");
+    if (on && !q) {
+      q = document.createElement("span");
+      q.className = "qmark";
+      q.textContent = "?";
+      q.setAttribute("aria-hidden", "true");
+      a.el.prepend(q);
+    }
+    if (!on) q?.remove();
+  }
+
   reset() {
+    for (const r of ROLES) this.setStuck(r, false);
     for (const r of ROLES) this.setTag(r, null);
     this.tickets = [];
     this.prNote = null;
@@ -388,12 +407,15 @@ export class Office {
       const until = this.celebrateUntil[a.role] ?? 0;
       const hop = t < until ? Math.abs(Math.sin(t / 140)) * 9 : 0;
       const dx = Math.round(a.x - f.w / 2), dy = Math.round(a.y - f.h - hop);
+      const stuck = this.stuck.has(a.role);
+      if (stuck) { ctx.translate(a.x, a.y); ctx.rotate(Math.sin(t / 160) * 0.045); ctx.translate(-a.x, -a.y); }
       if (fr.flip) {
         ctx.translate(dx + f.w, dy);
         ctx.scale(-1, 1);
         ctx.drawImage(this.atlas, f.x, f.y, f.w, f.h, 0, 0, f.w, f.h);
       } else ctx.drawImage(this.atlas, f.x, f.y, f.w, f.h, dx, dy, f.w, f.h);
       ctx.restore();
+      if (stuck) this.drawScratch(a, f, t);
     }
 
     // lightning flash on the window
@@ -403,6 +425,23 @@ export class Office {
       ctx.fill();
     }
     this.placeOverlays(t, order);
+  }
+
+  /** A hand scratching the head: a small skin-coloured block bobbing over the hair, with scratch marks. */
+  private drawScratch(a: Actor, f: Frame, t: number) {
+    const c = this.ctx;
+    const up = Math.sin(t / 70) > 0 ? 0 : 3;
+    const hx = Math.round(a.x + (a.flip ? -1 : 1) * f.w * 0.16), hy = Math.round(a.y - f.h + 7 + up);
+    c.fillStyle = "#e9b48a";
+    c.fillRect(hx - 3, hy - 3, 6, 6);
+    c.fillStyle = "#141210";
+    c.fillRect(hx - 3, hy + 3, 6, 1);
+    if (up === 0) {
+      c.fillStyle = "rgba(255,240,220,.9)";
+      c.fillRect(hx + 5, hy - 7, 2, 4);
+      c.fillRect(hx + 8, hy - 3, 3, 2);
+      c.fillRect(hx - 9, hy - 6, 2, 3);
+    }
   }
 
   private windowPath() {

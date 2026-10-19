@@ -7,6 +7,7 @@ import { validateEvent, unpackBatch, LIMITS, type ExtEvent, type ExtEventIn } fr
 import { mapHermes, type HermesEnvelope, type Privacy } from "../../src/ext/hermes";
 import { randomToken, newOfficeId, OFFICE_ID, sha256Hex, safeEqual, bearer, verifyHermesSignature, freshTimestamp, TokenBucket } from "../../src/ext/auth";
 import { json } from "./lib";
+import { insightEvents } from "./insights";
 
 export interface ExtEnv {
   EXT_OFFICES: DurableObjectNamespace;
@@ -66,6 +67,7 @@ interface OfficeRPC {
   events(token: string, after: number, session: string, limit: number): Promise<{ status: number; body: unknown }>;
   meta(token: string): Promise<{ status: number; body: unknown }>;
   share(token: string): Promise<{ status: number; body: unknown }>;
+  insights(token: string): Promise<{ status: number; body: unknown }>;
 }
 
 const stub = (env: ExtEnv, id: string) => env.EXT_OFFICES.get(env.EXT_OFFICES.idFromName(id)) as unknown as OfficeRPC & { fetch(r: Request): Promise<Response> };
@@ -115,7 +117,7 @@ export async function handleExt(req: Request, env: ExtEnv, url: URL): Promise<Re
     return ok(r.body, r.status, r.retryAfter ? { "retry-after": String(r.retryAfter) } : {});
   }
 
-  const m = path.match(/^\/api\/ext\/runs\/([^/]+)(?:\/(events|hermes|stream|share))?$/);
+  const m = path.match(/^\/api\/ext\/runs\/([^/]+)(?:\/(events|hermes|stream|share|insights))?$/);
   if (!m) return ok({ error: "not found" }, 404);
   const [, id, sub] = m;
   if (!OFFICE_ID.test(id)) return ok({ error: "unknown office" }, 404);
@@ -144,6 +146,10 @@ export async function handleExt(req: Request, env: ExtEnv, url: URL): Promise<Re
     const after = Math.max(0, Number(url.searchParams.get("after") ?? 0) || 0);
     const limit = Math.min(5000, Math.max(1, Number(url.searchParams.get("limit") ?? 2000) || 2000));
     const r = await s.events(token, after, url.searchParams.get("session") ?? "", limit);
+    return ok(r.body, r.status);
+  }
+  if (sub === "insights" && req.method === "GET") {
+    const r = await s.insights(token);
     return ok(r.body, r.status);
   }
   if (sub === "share" && req.method === "GET") {
@@ -311,6 +317,12 @@ export class ExtOffice extends DurableObject<ExtEnv> {
     const total = sql.exec<{ n: number; m: number | null }>("SELECT COUNT(*) AS n, MAX(seq) AS m FROM events").one();
     const last = Number(sql.exec<{ v: string }>("SELECT v FROM meta WHERE k = 'last'").toArray()[0]?.v ?? 0);
     return { status: 200, body: { id: this.cfg.id, agent: this.cfg.agent, name: this.cfg.name, privacy: this.cfg.privacy, createdAt: this.cfg.createdAt, lastActivity: last, events: total.n, lastSeq: total.m ?? 0, sessions, role: who, viewers: this.ctx.getWebSockets().length } };
+  }
+
+  /** Model calls and session boundaries for the cost dashboard (worker/src/insights.ts). */
+  async insights(token: string) {
+    if (!(await this.who(token))) return { status: 401, body: { error: "a view or ingest token is required" } };
+    return { status: 200, body: insightEvents(this.ctx.storage.sql) };
   }
 
   async share(token: string) {

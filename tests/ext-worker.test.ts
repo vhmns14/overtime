@@ -188,3 +188,28 @@ describe("replay for late viewers", () => {
     expect(meta.sessions.map((s: { id: string }) => s.id).sort()).toEqual(["A", "B"]); // the child session is not listed
   });
 });
+
+describe("insights endpoint", () => {
+  it("returns the office's model calls with subagent sessions folded into the parent; needs a token", async () => {
+    const o = await createOffice("metadata");
+    const body = [
+      { type: "session.start", session: "p1", data: { title: "Parent", model: "openai/gpt-4o-mini" } },
+      { type: "llm.call", session: "p1", data: { model: "openai/gpt-4o-mini", input_tokens: 1000, output_tokens: 10, cost_usd: 0.001 } },
+      { type: "subagent.start", session: "p1", data: { id: "sa1", name: "Docs", child_session: "p1-child" } },
+      { type: "session.start", session: "p1-child", data: { model: "openai/gpt-4o-mini" } },
+      { type: "llm.call", session: "p1-child", data: { model: "openai/gpt-4o-mini", input_tokens: 500, output_tokens: 5, cost_usd: 0.0005 } },
+      { type: "tool.start", session: "p1", data: { name: "web_search" } },
+      { type: "session.end", session: "p1-child", data: { status: "completed" } },
+      { type: "message", session: "p1", data: { role: "user", text: "hi" } },
+    ];
+    const post = await call("POST", `/api/ext/runs/${o.runId}/events`, body, { authorization: `Bearer ${o.ingestToken}` });
+    expect(post.json.accepted).toBe(body.length);
+    expect((await call("GET", `/api/ext/runs/${o.runId}/insights`)).status).toBe(401);
+    const r = await call("GET", `/api/ext/runs/${o.runId}/insights`, undefined, { authorization: `Bearer ${o.viewToken}` });
+    expect(r.status).toBe(200);
+    expect(r.json.truncated).toBe(false);
+    const evs = r.json.events as { type: string; session: string }[];
+    expect(evs.map((e) => e.type)).toEqual(["session.start", "llm.call", "llm.call", "message"]);
+    expect(evs.every((e) => e.session === "p1")).toBe(true);
+  });
+});

@@ -40,7 +40,7 @@ test("connect Hermes: setup snippet, waiting state, then live events in the offi
   await expect(setup).toBeVisible();
   const c = await credsFrom(page);
   const snippet = setup.locator("[data-snippet]");
-  await expect(snippet).toContainText(`OVERTIME_URL=http://127.0.0.1:8787/api/ext/runs/${c.runId}/hermes`);
+  await expect(snippet).toContainText(`OVERTIME_URL=${new URL(page.url()).origin}/api/ext/runs/${c.runId}/hermes`);
   await expect(snippet).toContainText(`OVERTIME_TOKEN=${c.ingestToken}`);
   await expect(snippet).toContainText("hermes plugins enable hermes-overtime");
   await expect(setup).toContainText("Waiting for the first event");
@@ -49,7 +49,7 @@ test("connect Hermes: setup snippet, waiting state, then live events in the offi
   expect(py.status()).toBe(200);
   expect(await py.text()).toContain("def register(ctx");
   await setup.locator('[data-tab="webhook"]').click();
-  await expect(snippet).toContainText(`url: http://127.0.0.1:8787/api/ext/hermes/webhook/${c.runId}`);
+  await expect(snippet).toContainText(`url: ${new URL(page.url()).origin}/api/ext/hermes/webhook/${c.runId}`);
   await expect(snippet).toContainText(`OVERTIME_WEBHOOK_SECRET=${c.webhookSecret}`);
   await expect(snippet).toContainText("secret_env: OVERTIME_WEBHOOK_SECRET");
   await shot(page, "hermes-setup");
