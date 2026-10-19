@@ -67,6 +67,7 @@ function createAllowed(ip: string, now = Date.now()): boolean {
 }
 
 async function body(req: Request): Promise<Record<string, unknown> | null> {
+  if (Number(req.headers.get("content-length") ?? "0") > 8192) return null;
   const t = await req.text();
   if (t.length > 8192) return null;
   try { const v = t ? JSON.parse(t) : {}; return v && typeof v === "object" && !Array.isArray(v) ? v : null; } catch { return null; }
@@ -111,7 +112,10 @@ export async function handleBuilding(req: Request, env: BuildingEnv, url: URL): 
   if (!m) return ok({ error: "not found" }, 404);
   const [, id, sub, n, act] = m;
   if (!BUILDING_ID.test(id)) return ok({ error: "unknown building" }, 404);
-  const token = bearer(req) || url.searchParams.get("v") || "";
+  // ?v= carries the read-only building view token only; the admin token must come in a header
+  const qv = url.searchParams.get("v") ?? "";
+  if (qv && !qv.startsWith("ot_bview_")) return ok({ error: "only the building's view token may be passed as ?v=; send the admin token in the Authorization header" }, 400);
+  const token = bearer(req) || qv;
   const s = bstub(env, id);
 
   if (!sub && req.method === "GET") {

@@ -27,6 +27,7 @@
     "tests/control.test.ts",
     "tests/notify.test.ts",
     "tests/office-building.test.ts",
+    "tests/security-audit.test.ts",
     "tests/helpers/**"
   ]
 }

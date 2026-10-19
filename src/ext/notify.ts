@@ -157,7 +157,7 @@ export function toMessage(c: Candidate, watchUrl: string): Message {
   return { title: c.title, body: c.body, url: watchUrl, tag: `${c.trigger}:${c.session}`.slice(0, 64) };
 }
 
-const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const escHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Telegram sendMessage body (HTML parse mode, every value escaped). */
 export function telegramBody(chatId: string, m: Message): Record<string, unknown> {

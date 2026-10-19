@@ -126,7 +126,11 @@ export async function handleExt(req: Request, env: ExtEnv, url: URL): Promise<Re
     if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") return ok({ error: "expected a WebSocket upgrade" }, 426);
     return s.fetch(req);
   }
-  const token = bearer(req) || url.searchParams.get("v") || "";
+  // ?v= is for the read-only viewer link only: a write-capable token in a URL ends up in logs,
+  // proxies and Referer headers, so it is refused there and must come in the Authorization header
+  const qv = url.searchParams.get("v") ?? "";
+  if (qv && !qv.startsWith("ot_view_")) return ok({ error: "only the read-only view token may be passed as ?v=; send other tokens in the Authorization header" }, 400);
+  const token = bearer(req) || qv;
   if ((sub === "events" || sub === "hermes") && req.method === "POST") {
     const b = await readBody(req);
     if ("error" in b) return b.error;
@@ -229,12 +233,13 @@ export class ExtOffice extends DurableObject<ExtEnv> {
     const limited = this.limit(1);
     if (limited) return limited;
     const sql = this.ctx.storage.sql;
-    if (env.delivery_id) {
-      const seen = sql.exec("SELECT 1 FROM deliveries WHERE id = ?", String(env.delivery_id).slice(0, 80)).toArray().length;
-      if (seen) return { status: 200, body: { accepted: 0, duplicate: true } };
-      sql.exec("INSERT INTO deliveries (id, at) VALUES (?, ?)", String(env.delivery_id).slice(0, 80), Date.now());
-      if (Math.random() < 0.02) sql.exec("DELETE FROM deliveries WHERE at < ?", Date.now() - 3_600_000);
-    }
+    // replay protection inside the timestamp window: by delivery_id, or (without one) by the signature
+    // itself, which is unique per body, so a captured delivery can never be stored twice
+    const did = env.delivery_id ? String(env.delivery_id).slice(0, 80) : `sig:${String(sig).slice(7, 71)}`;
+    const seen = sql.exec("SELECT 1 FROM deliveries WHERE id = ?", did).toArray().length;
+    if (seen) return { status: 200, body: { accepted: 0, duplicate: true } };
+    sql.exec("INSERT INTO deliveries (id, at) VALUES (?, ?)", did, Date.now());
+    if (Math.random() < 0.02) sql.exec("DELETE FROM deliveries WHERE at < ?", Date.now() - 3_600_000);
     return { status: 200, body: this.store(mapHermes(env, this.cfg.privacy), 1) };
   }
 
@@ -258,7 +263,13 @@ export class ExtOffice extends DurableObject<ExtEnv> {
     if (accepted.length) {
       sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('last', ?)", String(now));
       const n = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM events").one().n;
-      if (n > MAX_EVENTS) sql.exec("DELETE FROM events WHERE seq IN (SELECT seq FROM events ORDER BY seq LIMIT ?)", PRUNE);
+      if (n > MAX_EVENTS) {
+        sql.exec("DELETE FROM events WHERE seq IN (SELECT seq FROM events ORDER BY seq LIMIT ?)", PRUNE);
+        // sessions and subagent links of events that are gone go with them (the index never outgrows the log)
+        sql.exec("DELETE FROM sessions WHERE id NOT IN (SELECT DISTINCT session FROM events)");
+        sql.exec("DELETE FROM children WHERE child NOT IN (SELECT DISTINCT session FROM events) AND parent NOT IN (SELECT DISTINCT session FROM events)");
+        sql.exec("DELETE FROM deliveries WHERE at < ?", now - 3_600_000);
+      }
       this.broadcast(accepted);
       void this.touchAlarm();
       this.onAccepted(accepted);
@@ -333,7 +344,9 @@ export class ExtOffice extends DurableObject<ExtEnv> {
   /** WebSocket stream (hibernatable): sends the backlog after ?after=, then live batches. */
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    const who = await this.who(url.searchParams.get("v") ?? "");
+    const v = url.searchParams.get("v") ?? "";
+    // the stream only needs to read: never accept the ingest token in a URL (logs, proxies)
+    const who = v.startsWith("ot_ing_") ? null : await this.who(v);
     if (!who) return new Response("unauthorized", { status: 401 });
     if (this.ctx.getWebSockets().length >= MAX_WS) return new Response("too many viewers", { status: 429 });
     const pair = new WebSocketPair();

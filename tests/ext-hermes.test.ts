@@ -99,7 +99,8 @@ describe("privacy-aware tool views", () => {
   });
 
   it("URLs lose their query strings, patches reveal only paths", () => {
-    expect(viewTool("web_extract", { url: "https://docs.example.com/a/b?key=secret#x" }, "metadata").target).toBe("docs.example.com/a/b");
+    expect(viewTool("web_extract", { url: "https://docs.example.com/a/b?key=secret#x" }, "metadata").target).toBe("docs.example.com");
+    expect(viewTool("web_extract", { url: "https://docs.example.com/a/b?key=secret#x" }, "args").target).toBe("docs.example.com/a/b");
     expect(patchPaths("*** Begin Patch\n*** Update File: app/main.py\n+secret\n*** Delete File: old.py\n*** End Patch")).toEqual(["app/main.py", "old.py"]);
     const v = viewTool("patch", { mode: "patch", patch: "*** Update File: app/main.py\n+x" }, "metadata");
     expect(v.writes).toEqual([{ path: "app/main.py", op: "patch" }]);

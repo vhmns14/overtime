@@ -48,6 +48,14 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…"
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : typeof v === "number" ? String(v) : undefined);
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : typeof v === "string" && v.trim() && Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : undefined);
 
+function hostOnly(u: string): string {
+  try {
+    return new URL(u).host.slice(0, 200) || "(url)";
+  } catch {
+    return (u.match(/^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/?#]+)/i)?.[1] ?? "(url)").slice(0, 200);
+  }
+}
+
 function hostPath(u: string): string {
   try {
     const x = new URL(u);
@@ -110,7 +118,8 @@ export function viewTool(name: string, args: Record<string, unknown> | null | un
   const v: ToolView = { writes: [] };
   const path = str(a.path) ?? str(a.file_path) ?? str(a.filepath);
   if (path) v.target = clip(path, 200);
-  if (typeof a.url === "string") v.target = hostPath(a.url);
+  // metadata: the host only (a path can carry a token: api.telegram.org/bot<token>/…)
+  if (typeof a.url === "string") v.target = privacy === "metadata" ? hostOnly(a.url) : hostPath(a.url);
   if (typeof a.command === "string") {
     v.target = commandHead(a.command);
     if (privacy !== "metadata") v.summary = clip(a.command, 300);

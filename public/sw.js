@@ -3,11 +3,16 @@
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 
+function sameOrigin(u) {
+  try { return typeof u === "string" && new URL(u).origin === self.location.origin; } catch { return false; }
+}
+
 self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { body: e.data ? e.data.text() : "" }; }
   const title = typeof d.title === "string" && d.title ? d.title : "Overtime";
-  const url = typeof d.url === "string" && /^https?:\/\//.test(d.url) ? d.url : self.registration.scope;
+  // only ever open this Overtime: a notification can never send you to another site
+  const url = sameOrigin(d.url) ? d.url : self.registration.scope;
   e.waitUntil(self.registration.showNotification(title, {
     body: typeof d.body === "string" ? d.body : "",
     tag: typeof d.tag === "string" ? d.tag : "overtime",
@@ -19,7 +24,8 @@ self.addEventListener("push", (e) => {
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || self.registration.scope;
+  const want = e.notification.data && e.notification.data.url;
+  const url = sameOrigin(want) ? want : self.registration.scope;
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const w of wins) {
