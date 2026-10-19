@@ -5,12 +5,14 @@
 import { runChecks, summarizeReport, type SyntaxChecker } from "./checks";
 import { compactDiff, lineDiff } from "./diff";
 import { costOf } from "./llm";
-import { phaseMessage, systemPrompt, fence, type PhaseContext } from "./prompts";
-import { parseToolCall, safePath } from "./schema";
+import { phaseMessage, repoPhaseMessage, systemPrompt, fence, type PhaseContext } from "./prompts";
+import { parseToolCall, safePath, toolSpecs } from "./schema";
+import { LIMITS, RepoFS, keyFiles, repoPath, summarizeFile, treeListing, type Edit } from "./repo";
+import { runRepoChecks, type RepoReport } from "./repo-checks";
 import {
   ROLES, ROLE_INFO,
   type AgentState, type ChatMessage, type CheckReport, type DiffLine, type GateDecision, type GateRequest, type LLM,
-  type LogEntry, type Role, type RunConfig, type RunEvent, type RunStatus, type Snapshot, type StepId, type StepState, type Ticket, type ToolCall,
+  type LogEntry, type Role, type RunConfig, type TaskMode, type RunEvent, type RunStatus, type Snapshot, type StepId, type StepState, type Ticket, type ToolCall,
 } from "./types";
 
 export class CancelledError extends Error { constructor() { super("Run cancelled"); this.name = "CancelledError"; } }
@@ -33,7 +35,16 @@ export interface OrchestratorDeps {
   pace?: Pace;
   syntax?: SyntaxChecker;
   now?: () => number;
+  /** repo mode: loads the repo's virtual working tree (GitHub tree + lazy blob reads) */
+  loadRepo?: () => Promise<RepoFS>;
+  /** repo mode: opens the pull request after the human approves */
+  openPR?: (p: { title: string; body: string; slug: string; changes: Record<string, string | null>; onStep: (s: string) => void }) => Promise<{ url: string; number: number; branch: string }>;
+  /** label of the model, for the PR body */
+  modelLabel?: string;
 }
+
+/** Older tool results beyond this many characters are elided from an agent's history. */
+const MAX_HISTORY_CHARS = 60_000;
 
 const NEXT: Record<Role, Role | null> = { pm: "research", research: "coder", coder: "reviewer", reviewer: null, ops: null };
 const ROLE_NAMES = new Set<string>(ROLES);
@@ -63,6 +74,12 @@ export class Orchestrator {
   deployedUrl = "";
   summary = "";
   error = "";
+  readonly mode: TaskMode;
+  repo: RepoFS | null = null;
+  plan = "";
+  pr: { url: string; number: number; branch: string } | null = null;
+  private repoContext = "";
+  private treeContext = "";
   private listeners = new Set<(e: RunEvent) => void>();
   private abort = new AbortController();
   private paused: { promise: Promise<void>; resolve: () => void } | null = null;
@@ -72,6 +89,7 @@ export class Orchestrator {
 
   constructor(private deps: OrchestratorDeps) {
     this.now = deps.now ?? (() => Date.now());
+    this.mode = deps.config.mode ?? "site";
     this.agents = Object.fromEntries(ROLES.map((r) => [r, { role: r, activity: "idle", thought: "", log: [], filesTouched: [], tokens: 0, cost: 0 }])) as unknown as Record<Role, AgentState>;
   }
 
@@ -175,15 +193,18 @@ export class Orchestrator {
   }
 
   private async runAgent(role: Role, ctx: PhaseContext): Promise<ToolCall> {
-    const messages: ChatMessage[] = [{ role: "system", content: systemPrompt(role) }, { role: "user", content: phaseMessage(role, ctx) }];
+    const repo = this.mode === "repo";
+    const messages: ChatMessage[] = [{ role: "system", content: systemPrompt(role, this.mode) }, { role: "user", content: repo ? repoPhaseMessage(role, ctx) : phaseMessage(role, ctx) }];
+    const tools = toolSpecs(role, this.mode);
     let invalid = 0;
     for (let step = 0; step < this.config.maxStepsPerAgent; step++) {
       await this.checkpoint();
       if (this.usage.usd >= this.config.budgetUsd) throw new BudgetError(`Budget cap of $${this.config.budgetUsd.toFixed(2)} reached`);
       this.setAgent(role, { activity: "working" });
-      const res = await this.deps.llm.complete({ agent: role, messages, signal: this.abort.signal });
+      trimHistory(messages, MAX_HISTORY_CHARS);
+      const res = await this.deps.llm.complete({ agent: role, messages, signal: this.abort.signal, tools });
       this.account(role, res.usage);
-      const parsed = parseToolCall(res.text, role);
+      const parsed = parseToolCall(res.text, role, this.mode);
       if (!parsed.ok) {
         invalid++;
         this.say(role, `invalid reply (${parsed.error}) — retrying`, "warn");
@@ -214,6 +235,10 @@ export class Orchestrator {
 
   private async execTool(role: Role, call: ToolCall): Promise<{ terminal: boolean; text: string }> {
     const a = call.args as Record<string, string & unknown[]>;
+    if (this.mode === "repo" && this.repo) {
+      const r = await this.execRepoTool(role, call, this.repo);
+      if (r) return r;
+    }
     switch (call.tool) {
       case "write_file": {
         const path = safePath(String(a.path));
@@ -260,7 +285,133 @@ export class Orchestrator {
       }
       case "finish":
         return { terminal: true, text: "" };
+      default:
+        return { terminal: false, text: JSON.stringify({ ok: false, error: `${call.tool} is not available in this mode` }) };
     }
+  }
+
+  // ---------- repo mode tools ----------
+  private touch(role: Role, path: string) {
+    const touched = this.agents[role].filesTouched;
+    if (!touched.includes(path)) touched.push(path);
+    this.setAgent(role, { filesTouched: [...touched] });
+  }
+
+  private emitChanges(by: Role) {
+    const fs = this.repo!;
+    const ch = fs.changes();
+    for (const k of Object.keys(this.files)) delete this.files[k];
+    for (const c of ch) if (c.after !== undefined) this.files[c.path] = c.after;
+    this.emit({ type: "changes", changes: ch.map(({ path, status, added, removed }) => ({ path, status, added, removed })), by });
+    this.emit({ type: "files", files: { ...this.files }, changed: ch.map((c) => c.path), by });
+    if (by === "coder") this.setStep("code", "active", this.codeProgress());
+  }
+
+  private markTicket(id: unknown) {
+    if (!id) return;
+    const t = this.tickets.find((x) => x.id === id);
+    if (t && t.status !== "done") { t.status = "done"; this.emit({ type: "tickets", tickets: this.tickets.map((x) => ({ ...x })) }); }
+  }
+
+  private async execRepoTool(role: Role, call: ToolCall, fs: RepoFS): Promise<{ terminal: boolean; text: string } | null> {
+    const a = call.args as Record<string, unknown>;
+    const err = (error: string) => ({ terminal: false, text: JSON.stringify({ ok: false, error }) });
+    switch (call.tool) {
+      case "list_files": {
+        const prefix = typeof a.prefix === "string" ? a.prefix.replace(/^\.?\/+/, "") : "";
+        const all = fs.paths().filter((p) => p.startsWith(prefix));
+        const ch = fs.changes();
+        return { terminal: false, text: JSON.stringify({ files: all.slice(0, 400).map((p) => `${p} (${fs.size(p)}b)`), total: all.length, truncated: all.length > 400, changed: ch.map((c) => `${c.status} ${c.path} +${c.added} -${c.removed}`) }) };
+      }
+      case "read_file": {
+        const path = repoPath(String(a.path));
+        if (!path || !fs.has(path)) {
+          const near = path ? fs.paths().filter((p) => p.endsWith("/" + path.split("/").pop()) || p.includes(path)).slice(0, 5) : [];
+          return err(`file not found${near.length ? `; did you mean ${near.join(", ")}?` : ""}`);
+        }
+        let text: string | null;
+        try {
+          text = await fs.read(path);
+        } catch (e) {
+          return err(`could not read ${path}: ${(e as Error).message}`);
+        }
+        if (text === null) return err("file not found");
+        this.say(role, `read ${path}`);
+        const lines = text.split("\n");
+        const s0 = typeof a.start_line === "number" ? Math.max(1, Math.floor(a.start_line)) : 0;
+        const e0 = typeof a.end_line === "number" ? Math.min(lines.length, Math.floor(a.end_line)) : 0;
+        if (s0 || e0) {
+          const from = s0 || 1, to = e0 || Math.min(lines.length, from + 299);
+          const part = lines.slice(from - 1, to).join("\n");
+          return { terminal: false, text: fence(`file ${path} lines ${from}-${to} of ${lines.length}`, summarizeFile(path, part)) };
+        }
+        return { terminal: false, text: fence(`file ${path} (${lines.length} lines)`, summarizeFile(path, text)) };
+      }
+      case "search_repo": {
+        const r = fs.search(String(a.query), { regex: a.regex === true });
+        this.say(role, `searched “${String(a.query).slice(0, 40)}”: ${r.pathMatches.length} paths, ${r.contentMatches.length} lines`);
+        return { terminal: false, text: JSON.stringify({ ...r, note: `content search covers the ${r.searched} files read so far; path search covers all ${fs.paths().length} files` }) };
+      }
+      case "write_file": {
+        if (role !== "coder") return err("only the coder writes files");
+        const path = repoPath(String(a.path));
+        if (!path) return err("invalid path (relative paths only, no .., not .git/)");
+        const existed = fs.has(path);
+        fs.write(path, String(a.content));
+        this.touch(role, path);
+        this.markTicket(a.ticket);
+        this.say(role, `${existed ? "rewrote" : "created"} ${path} (${(String(a.content).length / 1024).toFixed(1)} KB)`);
+        this.emitChanges(role);
+        return { terminal: false, text: JSON.stringify({ ok: true, path, bytes: String(a.content).length }) };
+      }
+      case "edit_file": {
+        if (role !== "coder") return err("only the coder edits files");
+        const path = repoPath(String(a.path));
+        if (!path || !fs.has(path)) return err("file not found (use write_file to create a new file)");
+        const edits = (Array.isArray(a.edits) ? a.edits : []) as Edit[];
+        if (!edits.length) return err("edits must be a non-empty array of {search, replace}");
+        const r = await fs.edit(path, edits.slice(0, 30));
+        if (!r.ok) { this.say(role, `patch to ${path} did not apply: ${r.error}`, "warn"); return err(r.error); }
+        this.touch(role, path);
+        this.markTicket(a.ticket);
+        const c = fs.changes().find((x) => x.path === path);
+        this.say(role, `patched ${path} (${r.applied} edit${r.applied > 1 ? "s" : ""}${c ? `, +${c.added} −${c.removed}` : ""})`);
+        this.emitChanges(role);
+        return { terminal: false, text: JSON.stringify({ ok: true, path, applied: r.applied }) };
+      }
+      case "delete_file": {
+        if (role !== "coder") return err("only the coder deletes files");
+        const path = repoPath(String(a.path));
+        if (!path || !fs.has(path)) return err("file not found");
+        const d = await this.ask({ kind: "delete", agent: role, title: `Coder wants to delete ${path}`, body: String(a.reason ?? "") });
+        if (d.action === "reject") return { terminal: false, text: JSON.stringify({ ok: false, error: `the human refused to delete ${path}${d.comment ? `: ${d.comment}` : ""}` }) };
+        fs.delete(path);
+        this.touch(role, path);
+        this.say(role, `deleted ${path}`);
+        this.emitChanges(role);
+        return { terminal: false, text: JSON.stringify({ ok: true, deleted: path }) };
+      }
+      case "run_checks": {
+        const report = await this.repoChecks();
+        this.say(role, `ran ${report.results.length} checks on ${fs.changes().length} changed file(s): ${report.ok ? "all pass" : `${report.failures} failing`}${report.risks.length ? `, ${report.risks.length} risk flag(s)` : ""}`, report.ok ? "info" : "warn");
+        return { terminal: false, text: JSON.stringify({ ok: report.ok, failures: report.results.filter((r) => r.status !== "pass").map((r) => ({ check: r.label, status: r.status, details: r.details.slice(0, 6) })) }) };
+      }
+      default:
+        return null;
+    }
+  }
+
+  private async repoChecks(): Promise<RepoReport> {
+    const fs = this.repo!;
+    const changes = fs.changes();
+    let all: Record<string, string> = {};
+    if (changes.some((c) => /\.(html?|css)$/i.test(c.path))) {
+      // links are resolved against the whole tree; unread files count as present
+      all = Object.fromEntries(fs.paths().map((p) => [p, fs.peek(p) ?? ""]));
+    }
+    const report = runRepoChecks(changes, all, { syntax: this.deps.syntax });
+    this.lastReport = report;
+    return report;
   }
 
   private normalizeTickets(raw: unknown): Ticket[] {
@@ -347,6 +498,7 @@ export class Orchestrator {
     this.setStatus("running");
     this.say("system", `Task started: ${cfg.task}`);
     try {
+      if (this.mode === "repo") { await this.runRepo(); return this.status; }
       // PLAN
       this.setStep("plan", "active");
       let feedback: string | undefined;
@@ -503,5 +655,227 @@ export class Orchestrator {
       for (const id of Object.keys(this.steps) as StepId[]) if (this.steps[id].state === "active") this.setStep(id, "failed");
     }
     return this.status;
+  }
+
+  // ---------- repo pipeline: read repo → plan → research → patch ⇄ review → approve → open PR ----------
+  private async buildRepoContext(fs: RepoFS) {
+    const snap = fs.snapshot;
+    const paths = fs.paths();
+    const ign = Object.entries(snap.ignored.reasons).map(([k, v]) => `${v} ${k}`).join(", ");
+    const header = `REPOSITORY ${snap.repo} @ ${snap.branch} (${snap.sha.slice(0, 7)}): ${paths.length} files${snap.ignored.count ? `; ignored ${ign}` : ""}${snap.truncated ? "; tree truncated by GitHub" : ""}`;
+    const listing = treeListing(paths, 5000);
+    const pkg = paths.includes("package.json") ? await fs.read("package.json").catch(() => null) : null;
+    const keys = keyFiles(paths, pkg ?? undefined);
+    await fs.prefetch(keys);
+    const blocks: string[] = [];
+    let budget = LIMITS.pmContextChars - listing.length;
+    for (const k of keys) {
+      const t = (await fs.read(k).catch(() => null)) ?? "";
+      const cap = /readme/i.test(k) ? LIMITS.readmeChars : 3000;
+      const body = summarizeFile(k, t, Math.min(cap, Math.max(800, budget)));
+      budget -= body.length;
+      blocks.push(fence(`file ${k}`, body));
+      if (budget < 800) break;
+    }
+    this.treeContext = `${header}\n${fence("file tree", treeListing(paths, 3000))}`;
+    this.repoContext = `${header}\n${fence("file tree", listing)}\n${blocks.join("\n")}`;
+    this.say("pm", `read the repo: ${paths.length} files, ${keys.length} key file${keys.length === 1 ? "" : "s"} (${keys.join(", ") || "none"})`);
+  }
+
+  private async runRepo() {
+    const cfg = this.config;
+    if (!this.deps.loadRepo) throw new AgentError("Repo mode needs a connected GitHub repo");
+    // PLAN (PM reads the repo first)
+    this.setStep("plan", "active");
+    this.setAgent("pm", { activity: "working", thought: `Reading ${cfg.repo?.repo ?? "the repo"}…` });
+    const fs = await this.deps.loadRepo();
+    this.repo = fs;
+    const snap = fs.snapshot;
+    this.emit({ type: "repo", repo: snap.repo, branch: snap.branch, sha: snap.sha, files: snap.files.length, ignored: snap.ignored.count });
+    await this.buildRepoContext(fs);
+    let feedback: string | undefined;
+    let planFiles: string[] = [];
+    for (let attempt = 0; ; attempt++) {
+      const call = await this.runAgent("pm", { task: cfg.task, notes: cfg.notes, tickets: [], files: {}, feedback, repoContext: this.repoContext });
+      this.tickets = this.normalizeTickets(call.args.tickets);
+      this.plan = String(call.args.plan ?? call.args.summary ?? "");
+      const named = Array.isArray(call.args.files) ? (call.args.files as unknown[]).map(String) : [];
+      const mentioned = fs.paths().filter((p) => this.plan.includes(p) || this.tickets.some((t) => t.title.includes(p)));
+      planFiles = [...new Set([...named.map((p) => repoPath(p) ?? "").filter((p) => p && fs.has(p)), ...mentioned])].slice(0, 12);
+      const missing = named.filter((p) => !fs.has(repoPath(p) ?? "") && !/new|create/i.test(this.plan));
+      if (!planFiles.length) this.say("pm", "the plan does not name any existing file yet", "warn");
+      if (missing.length) this.say("pm", `plan names files that do not exist: ${missing.slice(0, 4).join(", ")}`, "warn");
+      this.emit({ type: "tickets", tickets: this.tickets.map((x) => ({ ...x })) });
+      this.say("pm", `plan: ${this.tickets.length} tickets touching ${planFiles.length ? planFiles.join(", ") : "files to be found"}`);
+      this.setAgent("pm", { activity: "whiteboard" });
+      if (this.deps.pace?.tickets) await this.deps.pace.tickets(this.tickets);
+      if (!cfg.gates.plan) break;
+      const d = await this.ask({
+        kind: "plan", agent: "pm", title: `PM wants to start with ${this.tickets.length} tickets on ${snap.repo}`,
+        body: this.plan,
+        items: [...this.tickets.map((t) => `${t.id} · ${ROLE_INFO[t.owner].name} · ${t.title}`), ...planFiles.map((p) => `file · ${p}`)],
+      });
+      if (d.action === "reject" && attempt < 2) { feedback = d.comment || "Rethink the plan: smaller change, name the exact files."; continue; }
+      feedback = d.action === "comment" ? d.comment : undefined;
+      break;
+    }
+    this.setStep("plan", "done");
+    await fs.prefetch(planFiles);
+    await this.handoff("pm", "research", `${this.tickets.length} tickets. Start with ${planFiles.slice(0, 2).join(" and ") || "the repo"}.`);
+
+    // RESEARCH
+    this.setStep("research", "active");
+    this.startTickets("research");
+    const rcall = await this.runAgent("research", { task: cfg.task, notes: cfg.notes, tickets: this.tickets, files: {}, feedback, repoContext: this.treeContext, plan: this.plan });
+    this.brief = String(rcall.args.brief ?? rcall.args.summary ?? "");
+    this.closeTickets("research");
+    this.setStep("research", "done");
+    await this.handoff("research", "coder", String(rcall.args.summary));
+
+    // CODE ⇄ REVIEW
+    let round = 0;
+    let report: RepoReport | null = null;
+    let reviewFeedback: string | undefined = feedback;
+    for (;;) {
+      this.setStep("code", "active", round ? 50 : this.codeProgress());
+      this.startTickets("coder");
+      const ccall = await this.runAgent("coder", { task: cfg.task, tickets: this.tickets, brief: this.brief, files: {}, repoContext: this.treeContext, plan: this.plan, report: round ? report ?? undefined : undefined, round, feedback: reviewFeedback, diff: round ? fs.diff() : undefined });
+      this.closeTickets("coder");
+      this.snapshot(round === 0 ? "Coder v1" : `Coder v${round + 1} (fix round ${round})`);
+      this.setStep("code", "done", 100);
+      await this.handoff("coder", "reviewer", String(ccall.args.summary));
+
+      this.setStep("review", "active");
+      this.startTickets("reviewer");
+      this.lastReport = null;
+      const vcall = await this.runAgent("reviewer", { task: cfg.task, tickets: this.tickets, brief: this.brief, files: {}, plan: this.plan, diff: fs.diff() });
+      report = (this.lastReport as RepoReport | null) ?? (await this.repoChecks());
+      this.emit({ type: "checks", report, round });
+      if (report.ok) {
+        this.closeTickets("reviewer");
+        this.setStep("review", "done");
+        await this.handoff("reviewer", "ops", String(vcall.args.summary || "All checks pass."));
+        break;
+      }
+      const fixes = Array.isArray(vcall.args.fixes) ? (vcall.args.fixes as unknown[]).map(String) : [];
+      const failing = report.results.filter((r) => r.status === "fail");
+      this.say("reviewer", `${report.failures} check${report.failures > 1 ? "s" : ""} failing: ${failing.map((r) => r.label.toLowerCase()).join(", ")}`, "warn");
+      if (round >= cfg.maxReviewRounds) {
+        this.say("reviewer", `still failing after ${round} fix round${round > 1 ? "s" : ""}; stopping the loop`, "warn");
+        this.setStep("review", "failed");
+        await this.handoff("reviewer", "ops", "Known failures: the PR gate will show them.");
+        break;
+      }
+      if (cfg.gates.review) {
+        const d = await this.ask({
+          kind: "review", agent: "reviewer",
+          title: `Reviewer: ${report.failures} check${report.failures > 1 ? "s" : ""} failing, fix before the PR?`,
+          body: String(vcall.args.summary ?? ""),
+          items: failing.flatMap((r) => r.details.slice(0, 3)),
+          diff: fixes.slice(0, 3).map((f) => ({ type: "add" as const, text: f.slice(0, 90) })),
+        });
+        if (d.action === "reject") {
+          this.say("reviewer", "fixes skipped by you", "warn");
+          this.setStep("review", "failed");
+          await this.handoff("reviewer", "ops", "Fixes skipped.");
+          break;
+        }
+        reviewFeedback = [fixes.length ? `Reviewer's fixes: ${fixes.join("; ")}` : "", d.comment ?? ""].filter(Boolean).join(" ") || undefined;
+      } else reviewFeedback = fixes.length ? `Reviewer's fixes: ${fixes.join("; ")}` : undefined;
+      round++;
+      await this.handoff("reviewer", "coder", String(vcall.args.summary || `${report.failures} checks failing`));
+    }
+
+    // OPEN PR (always behind an approval: it writes to a real repository)
+    this.setStep("deploy", "active");
+    this.startTickets("ops");
+    const changes = fs.changes();
+    const ocall = await this.runAgent("ops", { task: cfg.task, tickets: this.tickets, files: {}, diff: fs.diff() });
+    const final = report ?? (await this.repoChecks());
+    if (!changes.length) {
+      this.say("ops", "no changes to commit; no pull request", "warn");
+      this.setStep("deploy", "skipped");
+      this.finishRun("no changes");
+      return;
+    }
+    const title = String(ocall.args.title || `${cfg.task.replace(/\s+/g, " ").slice(0, 66)}`).trim();
+    const risks = final.risks;
+    const d = await this.ask({
+      kind: "pr", agent: "ops",
+      title: `Ops wants to open a PR on ${snap.repo} (${changes.length} file${changes.length > 1 ? "s" : ""}${risks.length ? `, ${risks.length} risky change${risks.length > 1 ? "s" : ""}` : ""})`,
+      body: title,
+      items: [...risks.map((r) => `⚠ ${r.path}: ${r.reason}`), ...changes.map((c) => `${c.status} · ${c.path} · +${c.added} −${c.removed}`)],
+      diff: this.changeSnippet(),
+    });
+    if (d.action === "reject") {
+      this.say("ops", "PR not opened (you rejected it); the patch is ready to download", "warn");
+      this.setStep("deploy", "skipped");
+      this.finishRun(`${changes.length} file(s) changed, PR not opened`);
+      return;
+    }
+    if (!this.deps.openPR) {
+      this.say("ops", "dry run: no GitHub write access configured, PR not opened", "warn");
+      this.setStep("deploy", "skipped");
+      this.finishRun(`${changes.length} file(s) changed (dry run)`);
+      return;
+    }
+    const body = this.prBody(title, final, d.comment);
+    const pr = await this.deps.openPR({ title, body, slug: title, changes: fs.changeSet(), onStep: (s) => this.say("ops", s) });
+    this.pr = pr;
+    this.deployedUrl = pr.url;
+    this.say("ops", `opened PR #${pr.number} from ${pr.branch} → ${snap.branch}`);
+    this.emit({ type: "pr", url: pr.url, number: pr.number, branch: pr.branch, repo: snap.repo });
+    this.closeTickets("ops");
+    this.setStep("deploy", "done");
+    this.finishRun(`PR #${pr.number} · ${changes.length} file${changes.length > 1 ? "s" : ""} changed · ${final.ok ? "all checks pass" : "with failing checks"}`);
+  }
+
+  private finishRun(summary: string) {
+    this.summary = summary;
+    for (const r of ROLES) this.setAgent(r, { activity: "idle" });
+    this.say("system", `Done: ${this.summary} · $${this.usage.usd.toFixed(3)} · ${this.usage.tokens.toLocaleString("en-US")} tokens`);
+    this.emit({ type: "done", summary: this.summary });
+    this.setStatus("done");
+  }
+
+  private changeSnippet(): DiffLine[] {
+    const out: DiffLine[] = [];
+    for (const c of this.repo!.changes()) {
+      const d = compactDiff(lineDiff(c.before ?? "", c.after ?? ""), 0).filter((l) => l.text !== "…" && l.text.trim());
+      for (const l of d.slice(0, 4)) out.push({ type: l.type, text: l.text.trim().slice(0, 90) });
+      if (out.length >= 6) break;
+    }
+    return out.slice(0, 6);
+  }
+
+  prBody(title: string, report: RepoReport, note?: string): string {
+    const fs = this.repo!;
+    const changes = fs.changes();
+    const icon = (s: string) => (s === "pass" ? "✅" : s === "warn" ? "⚠️" : "❌");
+    return [
+      `## Task`, this.config.task.trim(), "",
+      `## Plan`, this.plan.trim() || "(no plan text)", "",
+      this.tickets.length ? this.tickets.map((t) => `- [${t.status === "done" ? "x" : " "}] ${t.id} (${ROLE_INFO[t.owner].name}) ${t.title}`).join("\n") : "",
+      "", `## Files changed`,
+      ...changes.map((c) => `- \`${c.path}\` (${c.status}, +${c.added} −${c.removed})`), "",
+      `## Review`,
+      ...report.results.map((r) => `- ${icon(r.status)} ${r.label}${r.details.length ? `: ${r.details.slice(0, 3).join("; ")}` : ""}`),
+      ...(report.risks.length ? ["", `Risky changes approved by a human: ${report.risks.map((r) => `\`${r.path}\` (${r.reason})`).join(", ")}`] : []),
+      ...(note ? ["", `**Note from the reviewer who approved:** ${note.slice(0, 500)}`] : []),
+      "", `## Cost`, `${this.usage.tokens.toLocaleString("en-US")} tokens · $${this.usage.usd.toFixed(4)}${this.deps.modelLabel ? ` · ${this.deps.modelLabel}` : ""}`,
+      "", "---", "Made with Overtime",
+    ].filter((x, i, a) => !(x === "" && a[i - 1] === "")).join("\n");
+  }
+}
+
+/** Keeps an agent's conversation under a character budget by eliding the oldest tool results. */
+export function trimHistory(messages: ChatMessage[], max: number) {
+  let total = messages.reduce((n, m) => n + m.content.length, 0);
+  for (let i = 2; i < messages.length - 2 && total > max; i++) {
+    const m = messages[i];
+    if (m.role !== "user" || !m.content.startsWith("TOOL RESULT") || m.content.length < 400) continue;
+    const short = `${m.content.slice(0, 160)}… [older tool result elided to save context]`;
+    total -= m.content.length - short.length;
+    m.content = short;
   }
 }

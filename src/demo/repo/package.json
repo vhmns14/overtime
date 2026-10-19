@@ -1,0 +1,10 @@
+{
+  "name": "warung-cart",
+  "version": "0.3.1",
+  "description": "Cart math for a warung point-of-sale",
+  "main": "src/index.mjs",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "license": "MIT"
+}

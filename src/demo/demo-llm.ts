@@ -10,6 +10,7 @@ import indexV2 from "./site/index.v2.html?raw";
 import styleCss from "./site/style.css?raw";
 import mainJs from "./site/main.js?raw";
 import cupSvg from "./site/senja-cup.svg?raw";
+import { demoRepoReply } from "./demo-repo";
 
 export const DEMO_TASK = "Build a landing page for Kopi Senja";
 export const DEMO_FILES = { indexV1, indexV2, styleCss, mainJs, cupSvg };
@@ -113,14 +114,18 @@ export function demoReply(req: CompletionRequest): string {
 export interface DemoOptions {
   /** multiplies the simulated thinking time; 0 for tests */
   speed?: number;
+  /** which recording to replay */
+  script?: "site" | "repo";
 }
+
+export type DemoId = "kopi-senja" | "repo-fix";
 
 export class DemoLLM implements LLM {
   readonly label = "Demo (recorded run)";
   constructor(private opts: DemoOptions = {}) {}
 
   async complete(req: CompletionRequest): Promise<CompletionResult> {
-    const text = demoReply(req);
+    const text = this.opts.script === "repo" ? demoRepoReply(req) : demoReply(req);
     const promptChars = req.messages.reduce((n, m) => n + m.content.length, 0);
     const usage = { prompt: Math.ceil(promptChars / 4) + 420, completion: Math.ceil(text.length / 4) + 60 };
     const speed = this.opts.speed ?? 1;

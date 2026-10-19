@@ -21,7 +21,10 @@ export const STEPS: { id: StepId; label: string; role: Role }[] = [
 ];
 export type StepState = "pending" | "active" | "done" | "failed" | "skipped";
 
-export type ToolName = "write_file" | "read_file" | "list_files" | "run_checks" | "ask_user" | "handoff" | "finish";
+export type ToolName = "write_file" | "read_file" | "list_files" | "run_checks" | "ask_user" | "handoff" | "finish" | "search_repo" | "edit_file" | "delete_file";
+
+/** "site": build a static site from scratch. "repo": change an existing GitHub repo and open a PR. */
+export type TaskMode = "site" | "repo";
 
 export interface ToolCall {
   thought: string;
@@ -39,10 +42,20 @@ export interface Usage {
   completion: number;
 }
 
+/** OpenAI-style function tool, offered to providers that support native tool calling. */
+export interface ToolSpec {
+  type: "function";
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
 export interface CompletionRequest {
   agent: Role;
   messages: ChatMessage[];
   signal?: AbortSignal;
+  /** the tools this agent may call; clients that support native tool calling send them */
+  tools?: ToolSpec[];
+  /** streamed text, when the client streams */
+  onToken?: (chunk: string) => void;
 }
 
 export interface CompletionResult {
@@ -78,7 +91,7 @@ export interface CheckReport {
   totalBytes: number;
 }
 
-export type GateKind = "plan" | "review" | "deploy" | "question";
+export type GateKind = "plan" | "review" | "deploy" | "question" | "pr" | "delete";
 export interface GateRequest {
   id: string;
   kind: GateKind;
@@ -138,8 +151,15 @@ export interface Gates {
   review: boolean;
 }
 
+export interface RepoTarget {
+  repo: string;
+  branch: string;
+}
+
 export interface RunConfig {
   task: string;
+  mode?: TaskMode;
+  repo?: RepoTarget;
   notes?: string;
   refUrl?: string;
   gates: Gates;
@@ -165,4 +185,7 @@ export type RunEvent =
   | { type: "gate-closed"; id: string; decision: GateDecision }
   | { type: "deployed"; url: string; local: boolean }
   | { type: "pushed"; url: string }
+  | { type: "repo"; repo: string; branch: string; sha: string; files: number; ignored: number }
+  | { type: "changes"; changes: { path: string; status: "added" | "modified" | "deleted"; added: number; removed: number }[]; by: Role }
+  | { type: "pr"; url: string; number: number; branch: string; repo: string }
   | { type: "done"; summary: string };

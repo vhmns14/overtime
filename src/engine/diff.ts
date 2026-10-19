@@ -41,3 +41,65 @@ export function compactDiff(lines: DiffLine[], context = 1): DiffLine[] {
 export function diffStats(lines: DiffLine[]) {
   return { added: lines.filter((l) => l.type === "add").length, removed: lines.filter((l) => l.type === "del").length };
 }
+
+export interface Hunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: DiffLine[];
+}
+
+/** Unified-diff hunks (git style, `context` lines around each change). */
+export function hunks(a: string, b: string, context = 3): Hunk[] {
+  const lines = lineDiff(a, b);
+  const out: Hunk[] = [];
+  // line numbers before each diff line
+  let o = 1, n = 1;
+  const pos = lines.map((l) => {
+    const p = { o, n };
+    if (l.type !== "add") o++;
+    if (l.type !== "del") n++;
+    return p;
+  });
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].type === "ctx") { i++; continue; }
+    let start = Math.max(0, i - context);
+    let end = i;
+    // extend while the next change is within 2*context lines
+    for (let j = i; j < lines.length; j++) {
+      if (lines[j].type !== "ctx") end = j;
+      else if (j - end > context * 2) break;
+    }
+    const stop = Math.min(lines.length - 1, end + context);
+    const slice = lines.slice(start, stop + 1);
+    const h: Hunk = {
+      oldStart: pos[start].o,
+      newStart: pos[start].n,
+      oldLines: slice.filter((l) => l.type !== "add").length,
+      newLines: slice.filter((l) => l.type !== "del").length,
+      lines: slice,
+    };
+    if (h.oldLines === 0) h.oldStart--;
+    if (h.newLines === 0) h.newStart--;
+    out.push(h);
+    i = stop + 1;
+    start = i;
+  }
+  return out;
+}
+
+/** A git-style unified diff for one file. `a` undefined = added file, `b` undefined = deleted file. */
+export function unifiedDiff(path: string, a: string | undefined, b: string | undefined, context = 3): string {
+  const from = a === undefined ? "/dev/null" : `a/${path}`;
+  const to = b === undefined ? "/dev/null" : `b/${path}`;
+  const hs = hunks(a ?? "", b ?? "", context);
+  if (!hs.length) return "";
+  const head = [`diff --git a/${path} b/${path}`, a === undefined ? "new file mode 100644" : b === undefined ? "deleted file mode 100644" : "", `--- ${from}`, `+++ ${to}`].filter(Boolean);
+  const body = hs.flatMap((h) => [
+    `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
+    ...h.lines.map((l) => (l.type === "add" ? "+" : l.type === "del" ? "-" : " ") + l.text),
+  ]);
+  return [...head, ...body].join("\n");
+}
