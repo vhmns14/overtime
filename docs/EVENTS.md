@@ -196,13 +196,93 @@ expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest
 The plugin applies its `OVERTIME_PRIVACY` level on the Hermes machine; the office applies its own
 level again on arrival. The lower of the two wins.
 
-## Approvals (read-only in v1)
+## Approvals
 
-Overtime never answers an approval. The `ApprovalTransport` interface in `src/ext/approvals.ts` is
-the extension point: a future transport could implement `respond()` on top of Hermes' approval
-transport API (`ctx.register_approval_transport(name, present_fn)`, selected by the operator with
-`security.approval.transport`), where the plugin waits for an authenticated decision from Overtime and
-returns `request.respond(choice)`.
+Without remote control an office never answers an approval: Hermes asks in its own UI and the card
+is read-only. `approval.request` / `approval.response` events are observations only.
+
+## Remote control (opt-in)
+
+Code: `src/ext/control.ts` (signatures, audit chain), `src/ext/notify.ts`, `src/ext/webpush.ts`,
+`worker/src/control.ts` (routes + the `ControlOffice` Durable Object, which extends the office),
+`integrations/hermes-overtime/overtime_control.py` (the plugin side), `src/app/control.ts` (UI).
+
+Off until both sides opt in: the office (a paired device ticks *answer approvals* / *send tasks*) and
+the Hermes machine (`OVERTIME_REMOTE_APPROVAL=1`, `OVERTIME_REMOTE_TASKS=1`).
+
+### Tokens
+
+| Token | Can |
+|---|---|
+| view (`ot_view_…`) | read events. Never controls anything |
+| ingest (`ot_ing_…`, on the Hermes machine) | write events; register approvals and **read** decisions; claim and acknowledge tasks; pair the *first* device while none is paired |
+| control (`ot_ctl_…`, one per paired device) | decide approvals, queue/cancel tasks, change policy and notifications, pair/revoke devices, read the audit log |
+
+Control tokens are stored as SHA-256 hashes and revocable. A pairing link is
+`/watch/<office>#v=<view>&c=<control>`; the app moves the control token to local storage and removes
+it from the address bar.
+
+### Routes (`/api/ext/runs/:id/control/…`)
+
+| Route | Token | |
+|---|---|---|
+| `POST enable` `{device}` | ingest, only while no device is paired | Pairs the first device → `{controlToken, deviceId}` |
+| `POST devices` `{name}` · `POST devices/:dev/revoke` | control | Pair another device (→ `controlToken`, pairing `watch` link) · revoke |
+| `POST policy` `{remoteApproval, remoteTasks}` | control | Both default to `false` |
+| `GET state` | control | Policy, notification settings (Telegram token never returned), devices, recent approvals and tasks, VAPID public key |
+| `POST approvals` `{request_id, session, surface, command, description, pattern_key, expires_in}` | ingest | The plugin registers a pending approval (409 while remote approval is off). `expires_in` 10–900 s |
+| `GET approvals/:rid?wait=0..25` | ingest | Long-poll: `{status, decision}` with `decision = {request_id, command_sha256, choice, by, at, sig}` once decided |
+| `POST approvals/:rid/decide` `{choice}` | control | `once`, `session` or `deny` (`always` is refused). First answer wins; expired → 410 |
+| `POST approvals/:rid/outcome` `{outcome}` | ingest | `applied`, `stale`, `timeout`, `answered_locally`, `unsupported` |
+| `POST commands` `{kind: "run", prompt, confirm: true}` · `{kind: "stop", target, confirm: true}` | control | Queue a task (≤4000 chars, no control characters, ≤5 waiting) or stop a running one |
+| `GET commands/next?wait=0..25` | ingest | Claims the oldest queued task: `{id, kind, payload, created_at, by, sig}`. A claim not confirmed within 120 s becomes `lost` and is never handed out again |
+| `POST commands/:cid/ack` `{status, run_id, error}` | ingest | `started`, `completed`, `failed`, `cancelled`, `rejected` |
+| `POST commands/:cid/cancel` | control | Only while still queued |
+| `POST notify` `{settings, telegram: {token, chatId} \| {clear} \| {useServer}}` · `POST notify/test` | control | Settings below; the test bypasses dedupe |
+| `POST push/subscribe` `{subscription}` · `POST push/unsubscribe` `{endpoint}` | control | Browser push services only (FCM, Mozilla, Apple, Windows) |
+| `GET audit` | control | `{entries, publicKey, verified}` |
+
+Every change pings connected viewers with a content-free `{"type":"control","rev":n}` WebSocket
+message; devices then refetch `state`.
+
+### Signatures the plugin checks
+
+Key: `hex(SHA-256(ingest token))` (the office stores exactly this hash). HMAC-SHA256, hex:
+
+```
+decision: v1|decision|<office>|<request_id>|<sha256(command)>|<choice>|<device name>|<at ms>
+command:  v1|command|<office>|<id>|<kind>|<sha256(payload)>|<created_at ms>
+```
+
+The plugin applies a decision only if the signature verifies, `request_id` is its own,
+`command_sha256` matches the command it registered, the choice is `once`/`session`/`deny`, and the
+head of Hermes' gateway approval queue for that session is still that command. It then calls
+`tools.approval.resolve_gateway_approval(session_key, choice)`. Anything else, including a timeout
+or a network error, leaves the approval to Hermes.
+
+### Audit log
+
+Entries `{seq, at, kind, subject, detail, by, prev, hash, sig}`: `hash = SHA-256(prev|seq|at|kind|subject|detail|by)`,
+`prev` is the previous entry's hash (`genesis` for the first), `sig` is ECDSA P-256 / SHA-256 over
+the hash bytes (IEEE P1363, base64url) with the office's key; `publicKey` is SPKI, base64url.
+`verifyAudit()` in `src/ext/control.ts` checks the chain.
+
+### Notifications
+
+Settings: `enabled` (default false), `triggers` `{approval, error, stuck, finished}` (defaults
+true/true/true/false), `quiet {on, start, end, tz}` (HH:MM, IANA zone, may cross midnight),
+`stuckMinutes` (10), `dedupeS` (600), `maxPerHour` (12, per channel). Triggers: `approval.request`
+and `human_input.request` → *approval*; `error` and `session.end` with `failed` → *error*;
+`session.end` `completed` (main agent, not `final`) → *finished*; a session still `working` with no
+events for `stuckMinutes` → *stuck* (the Durable Object alarm, once per quiet stretch). Messages carry
+`{title, body, url, tag}`; `url` is the office's `/watch` link. Telegram uses `sendMessage` (HTML,
+escaped). Web Push uses VAPID (ES256) and aes128gcm (RFC 8291); a 404/410 from the push service drops
+the subscription.
+
+Approval transports: Hermes builds newer than 0.19.0 document `ctx.register_approval_transport(name,
+present_fn)` with `security.approval.transport`. Hermes 0.19.0 on PyPI does not have it; the plugin
+uses the gateway approval queue above, which is what Hermes' own `/approve` and
+`POST /v1/runs/{id}/approval` use.
 
 ## Generic example
 

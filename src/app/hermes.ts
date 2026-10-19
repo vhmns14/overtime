@@ -12,6 +12,7 @@ import { DEFAULT_RULES, parseRules, type RoleRule } from "../ext/roles";
 import { READ_ONLY_APPROVALS, type ApprovalTransport } from "../ext/approvals";
 import { hermesDemoScript, stampEnvelope, HERMES_DEMO_TASK } from "../demo/hermes-session";
 import { esc } from "./deploy";
+import { ControlController } from "./control";
 
 export interface OfficeCreds {
   runId: string;
@@ -67,6 +68,8 @@ export class HermesController {
   private privacyChoice: Privacy = "metadata";
   approvals: ApprovalTransport = READ_ONLY_APPROVALS;
   rules: RoleRule[];
+  /** opt-in remote control: approvals, tasks, notifications (src/app/control.ts) */
+  control: ControlController;
 
   constructor(private host: HermesHost) {
     const saved = store.getJSON<RoleRule[] | null>(RULES_KEY, null);
@@ -74,6 +77,8 @@ export class HermesController {
     this.st = newOffice(this.rules);
     this.creds = store.getJSON<OfficeCreds | null>(CREDS_KEY, null);
     if (this.creds && this.creds.origin !== location.origin) this.creds = null; // offices belong to one Overtime deployment
+    this.control = new ControlController({ toast: (m) => this.host.toast(m), shownSession: () => this.shown, changed: () => this.renderPending() });
+    this.approvals = this.control.transport;
   }
 
   get session(): SessionView | null {
@@ -97,6 +102,7 @@ export class HermesController {
       this.mode = "waiting";
       void this.connect(this.creds.runId, this.creds.viewToken);
     } else this.mode = "connect";
+    this.control.attach(this.mode === "watch" && watch ? { id: watch.id, viewToken: watch.token } : (this.mode === "waiting" && this.creds) ? { id: this.creds.runId, viewToken: this.creds.viewToken, ingestToken: this.creds.ingestToken } : null);
     this.render();
   }
 
@@ -127,6 +133,7 @@ export class HermesController {
       this.creds = { runId: String(j.runId), ingestToken: String(j.ingestToken), viewToken: String(j.viewToken), webhookSecret: String(j.webhookSecret), privacy: j.privacy as Privacy, createdAt: Date.now(), origin: location.origin };
       store.setJSON(CREDS_KEY, this.creds);
       this.mode = "waiting";
+      this.control.attach({ id: this.creds.runId, viewToken: this.creds.viewToken, ingestToken: this.creds.ingestToken });
       this.render();
       this.host.openOverlay("hermes");
       void this.connect(this.creds.runId, this.creds.viewToken);
@@ -140,6 +147,7 @@ export class HermesController {
     this.leave();
     store.setJSON(CREDS_KEY, null);
     this.creds = null;
+    this.control.attach(null);
     this.st = newOffice(this.rules);
     this.shown = null;
     this.mode = "connect";
@@ -198,6 +206,7 @@ export class HermesController {
       if (typeof m.data !== "string" || m.data === "pong") return;
       let msg: { type?: string; events?: ExtEvent[] };
       try { msg = JSON.parse(m.data); } catch { return; }
+      if (msg.type === "control") { this.control.onPing(); return; }
       if (msg.type === "events" && Array.isArray(msg.events)) {
         for (const e of msg.events) this.ingest(e);
         this.render();
@@ -356,7 +365,7 @@ export class HermesController {
     const s = this.session;
     if (this.mode === "demo") return { html: `<b>Demo</b> · recorded Hermes session · ${this.demoRunning ? (s?.status === "waiting" ? "waiting for approval" : "working") : s ? "done" : "ready"}`, status: this.demoRunning ? (s?.status === "waiting" ? "waiting" : "running") : s ? "done" : "idle" };
     const connTxt = { idle: "offline", connecting: "connecting…", open: "live", polling: "live (polling)", error: "offline" }[this.conn];
-    const who = this.mode === "watch" ? "<b>Read-only</b> · " : "<b>Hermes</b> · ";
+    const who = this.mode === "watch" ? (this.control.paired ? "<b>Viewer</b> · remote control · " : "<b>Read-only</b> · ") : "<b>Hermes</b> · ";
     if (!s) return { html: `${who}${this.mode === "connect" ? "not connected" : connTxt} · waiting for the first event`, status: this.conn === "error" ? "failed" : "idle" };
     const st = { working: "working", idle: "idle", waiting: "waiting in Hermes", ended: "session closed" }[s.status];
     return { html: `${who}${esc(s.model ?? "")} · ${st} · ${connTxt}`, status: s.status === "working" ? "running" : s.status === "waiting" ? "waiting" : this.conn === "error" ? "failed" : "idle" };
@@ -389,8 +398,8 @@ export class HermesController {
            <label class="check hx-follow"><input type="checkbox" data-hx="follow" ${this.follow ? "checked" : ""}> Follow new sessions</label>` : "";
       const waiting = !s ? `<div class="hx-wait" role="status"><span class="hx-pulse" aria-hidden="true"></span><div><b>Waiting for the first event…</b><br><span>Run any task in Hermes. New sessions show up here by themselves.</span></div></div>` : "";
       const actions = this.mode === "watch"
-        ? `<span class="task-mode">Read-only viewer</span>`
-        : `<button type="button" class="btn btn-sm" data-hx="setup">Setup</button><button type="button" class="btn btn-sm" data-hx="share">Copy viewer link</button><span class="spacer"></span><button type="button" class="link-btn" data-hx="demo">Demo</button>`;
+        ? `<span class="task-mode">${this.control.paired ? "Viewer · remote control on" : "Read-only viewer"}</span><span class="spacer"></span><button type="button" class="btn btn-sm" data-hx="control">Remote control</button>`
+        : `<button type="button" class="btn btn-sm" data-hx="setup">Setup</button><button type="button" class="btn btn-sm" data-hx="share">Copy viewer link</button><button type="button" class="btn btn-sm" data-hx="control">Remote control</button><span class="spacer"></span><button type="button" class="link-btn" data-hx="demo">Demo</button>`;
       html = `${err}${waiting}${picker ? `<div class="hx-row">${picker}</div>` : ""}<div class="task-row">${actions}</div>`;
     }
     if (box.innerHTML !== html) {
@@ -421,7 +430,8 @@ export class HermesController {
   private renderPending() {
     const card = $("#approval");
     const p = this.session?.pending;
-    if (!p) { if (card.dataset.ext) { card.hidden = true; delete card.dataset.ext; } return; }
+    // a remote-control card (src/app/control.ts) with Approve/Deny covers this approval
+    if (!p || (p.kind === "approval" && this.mode !== "demo" && this.control.covers(this.shown))) { if (card.dataset.ext) { card.hidden = true; delete card.dataset.ext; } return; }
     const where = this.session?.platform ? ` (${esc(this.session.platform)})` : "";
     const html = `<p class="approval-title"><b>Hermes is waiting for ${p.kind === "approval" ? "approval" : "you"}</b> in its own UI${where}.</p>
       <p class="hx-pending">${esc(p.text)}</p>${p.detail ? `<pre class="diff"><span>${esc(p.detail)}</span></pre>` : ""}
@@ -438,6 +448,7 @@ export class HermesController {
     box.querySelector('[data-hx="mine"]')?.addEventListener("click", () => document.dispatchEvent(new CustomEvent("overtime:surface", { detail: "hermes" })));
     box.querySelector('[data-hx="connect"]')?.addEventListener("click", () => document.dispatchEvent(new CustomEvent("overtime:surface", { detail: "hermes" })));
     box.querySelector('[data-hx="setup"]')?.addEventListener("click", () => this.host.openOverlay("hermes"));
+    box.querySelector('[data-hx="control"]')?.addEventListener("click", () => this.control.open());
     box.querySelector('[data-hx="share"]')?.addEventListener("click", () => void this.copy(this.watchUrl(), "Viewer link copied. Anyone with it can watch, read-only."));
     box.querySelector<HTMLSelectElement>('[data-hx="privacy"]')?.addEventListener("change", (e) => { this.privacyChoice = (e.target as HTMLSelectElement).value as Privacy; });
     box.querySelector<HTMLSelectElement>('[data-hx="session"]')?.addEventListener("change", (e) => {

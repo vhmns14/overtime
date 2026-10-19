@@ -15,6 +15,7 @@
     "atlas": "python3 scripts/build-atlas.py",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:control": "playwright test -c playwright.control.config.ts",
     "test:plugin": "cd integrations/hermes-overtime && uv run --no-project --with pytest python -m pytest -q tests",
     "gen:schema": "vite-node scripts/gen-events-schema.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p worker/tsconfig.json",

@@ -1,11 +1,10 @@
-// Approvals for external agents. v1 is read-only on purpose: Hermes asks for approval in its own
-// UI (CLI, TUI, Desktop, chat platform) and Overtime only shows that it is waiting.
+// Approvals for external agents. By default read-only: Hermes asks for approval in its own UI (CLI,
+// TUI, Desktop, chat platform) and Overtime only shows that it is waiting.
 //
-// Extension point: a future transport can implement `respond`, e.g. through Hermes' approval
-// transport API (`ctx.register_approval_transport(name, present_fn)` with
-// `security.approval.transport` selected by the operator), where the plugin long-polls Overtime for
-// an authenticated decision and returns `request.respond(choice)`. The UI already asks
-// `canRespond()` before it would render buttons, so adding it is a contained change.
+// Remote control (opt-in, src/app/control.ts) provides a transport that answers Hermes *gateway*
+// approvals through the office's control API; the Hermes plugin resolves them inside Hermes with
+// tools.approval.resolve_gateway_approval after verifying the signed decision (docs/EVENTS.md,
+// "Remote control"). The UI asks canRespond() before it renders buttons.
 
 export type ApprovalChoice = "once" | "session" | "always" | "deny";
 
