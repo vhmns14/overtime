@@ -2,6 +2,7 @@
 // GitHub with the user's token (browser → api.github.com directly; the token never touches our Worker).
 
 export async function deployToWorker(runId: string, task: string, files: Record<string, string>): Promise<{ url: string; local: boolean }> {
+  if (__PREVIEW__) return { url: "", local: true }; // single-file preview: no network at all
   try {
     const res = await fetch(`/api/runs/${runId}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ task, files }) });
     if (!res.ok) throw new Error(String(res.status));
@@ -13,6 +14,7 @@ export async function deployToWorker(runId: string, task: string, files: Record<
 }
 
 export async function fetchRef(url: string, signal: AbortSignal): Promise<string> {
+  if (__PREVIEW__) throw new Error("offline preview: no network");
   const res = await fetch(`/api/fetch?url=${encodeURIComponent(url)}`, { signal });
   const data = (await res.json().catch(() => ({}))) as { text?: string; title?: string; error?: string };
   if (!res.ok || !data.text) throw new Error(data.error ?? `fetch failed (${res.status})`);

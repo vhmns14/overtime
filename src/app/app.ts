@@ -5,6 +5,7 @@ import { Orchestrator, DEFAULT_CONFIG } from "../engine/orchestrator";
 import { PRESETS } from "../engine/llm";
 import { lineDiff, diffStats } from "../engine/diff";
 import { buildZip } from "../engine/zip";
+import { basicSyntax } from "../engine/checks";
 import { store } from "../engine/storage";
 import { ROLES, ROLE_INFO, STEPS, type DiffLine, type GateRequest, type LogEntry, type Role, type RunEvent, type Snapshot, type StepId, type StepState } from "../engine/types";
 import { DEMO_TASK, DEMO_PRICING } from "../demo/demo-llm";
@@ -70,8 +71,9 @@ export class App {
     const task = $<HTMLTextAreaElement>("#task");
     task.value = DEMO_TASK;
     $("#run-title").textContent = runTitle(DEMO_TASK);
-    task.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $<HTMLFormElement>("#task-form").requestSubmit(); } });
-    $("#task-form").addEventListener("submit", (e) => { e.preventDefault(); void this.start(); });
+    // no <form> submits anywhere: sandboxed embeds (no allow-forms) block them before JS can intercept
+    task.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void this.start(); } });
+    $("#run-btn").addEventListener("click", () => void this.start());
     $("#notes-toggle").addEventListener("click", () => { const w = $("#notes-wrap"); w.hidden = !w.hidden; $("#notes-toggle").textContent = w.hidden ? "+ Brief notes" : "− Brief notes"; });
     $("#pause-btn").addEventListener("click", () => { if (!this.orch) return; if (this.orch.status === "paused") this.orch.resume(); else this.orch.pause(); });
     $("#cancel-btn").addEventListener("click", () => this.orch?.cancel());
@@ -124,6 +126,7 @@ export class App {
         pricing: demo ? DEMO_PRICING : { input: this.s.priceIn, output: this.s.priceOut },
       },
       fetchRef,
+      syntax: __PREVIEW__ ? basicSyntax : undefined,
       deploy: (id, files) => deployToWorker(id, demo ? DEMO_TASK : task, files),
       push,
       pace: {
@@ -442,7 +445,7 @@ export class App {
       <label class="field"><span>Token (fine-grained, contents: write)</span><input name="ghToken" type="password" value="${esc(secrets.ghToken())}" autocomplete="off" spellcheck="false"><small>Session only. The browser talks to api.github.com directly; the token never reaches the Worker.</small></label>
       <h3>Demo</h3>
       <label class="field"><span>Demo speed</span><select name="demoSpeed"><option value="1" ${s.demoSpeed === 1 ? "selected" : ""}>Normal</option><option value="0.5" ${s.demoSpeed === 0.5 ? "selected" : ""}>Fast</option><option value="0.25" ${s.demoSpeed === 0.25 ? "selected" : ""}>Very fast</option></select></label>
-      <div class="task-row"><button type="button" class="btn btn-ghost" data-clear>Forget keys</button><span class="spacer"></span><button type="submit" class="btn btn-primary">Save</button></div>
+      <div class="task-row"><button type="button" class="btn btn-ghost" data-clear>Forget keys</button><span class="spacer"></span><button type="button" class="btn btn-primary" data-save>Save</button></div>
       <p>${store.persistent ? "Settings and run history are saved in this browser." : "Storage is unavailable here (sandboxed), so settings last for this session only."}</p>
     </form>`;
     const f = el.querySelector<HTMLFormElement>("#settings-form")!;
@@ -462,8 +465,8 @@ export class App {
       (f.elements.namedItem("priceOut") as HTMLInputElement).value = String(p.pricing.output);
     });
     el.querySelector("[data-clear]")!.addEventListener("click", () => { secrets.setApiKey(this.s, ""); secrets.setGhToken(""); this.renderSettings(); this.toast("Keys forgotten."); });
-    f.addEventListener("submit", (e) => {
-      e.preventDefault();
+    f.addEventListener("submit", (e) => e.preventDefault());
+    el.querySelector("[data-save]")!.addEventListener("click", () => {
       const v = (n: string) => (f.elements.namedItem(n) as HTMLInputElement).value.trim();
       const c = (n: string) => (f.elements.namedItem(n) as HTMLInputElement).checked;
       const next: Settings = {

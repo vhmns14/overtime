@@ -118,7 +118,7 @@ test("live mode without a key asks for one instead of calling anything", async (
   await openApp(page);
   await page.locator(isMobile(page) ? '.mobile-bar [data-open="settings"]' : '.panel-nav [data-open="settings"]').click();
   await page.locator('[data-mode="live"]').click();
-  await page.locator("#settings-form").evaluate((f: HTMLFormElement) => f.requestSubmit());
+  await page.locator("#settings [data-save]").click();
   await expect(page.locator("#task-mode")).toContainText("Live");
   await page.locator("#task").fill("Build a pricing page for a bakery");
   await page.locator("#run-btn").click();

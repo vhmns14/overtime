@@ -1,0 +1,20 @@
+import { chromium } from "@playwright/test";
+import { readFileSync } from "node:fs";
+process.env.LD_LIBRARY_PATH = "/workspace/work/.pw-libs";
+const html = readFileSync("preview.html", "utf8");
+const browser = await chromium.launch({ executablePath: "/workspace/work/.pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell" });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+page.on("console", (m) => console.log("console:", m.type(), m.text().slice(0, 300)));
+page.on("pageerror", (e) => console.log("pageerror", String(e).slice(0, 300)));
+await page.route("http://preview.test/**", (route) => {
+  const u = new URL(route.request().url());
+  if (u.pathname === "/") return route.fulfill({ contentType: "text/html", body: `<iframe id="f" sandbox="allow-scripts" src="/preview.html?speed=0.2" style="width:1400px;height:880px"></iframe>` });
+  return route.fulfill({ contentType: "text/html", body: html });
+});
+await page.goto("http://preview.test/");
+await page.waitForTimeout(1500);
+const f = page.frameLocator("#f");
+await f.locator("#run-btn").click();
+await page.waitForTimeout(4000);
+console.log(await f.locator("#log").innerText());
+await browser.close();

@@ -31,7 +31,7 @@
         </nav>
       </div>
       <h2 class="run-title" id="run-title"></h2>
-      <form class="task" id="task-form" autocomplete="off">
+      <div class="task" id="task-form">
         <label class="sr-only" for="task">Task</label>
         <textarea id="task" rows="2" maxlength="600" spellcheck="false"></textarea>
         <div class="task-notes" id="notes-wrap" hidden>
@@ -46,9 +46,9 @@
           <span class="spacer"></span>
           <button type="button" class="btn btn-ghost" id="pause-btn" hidden>Pause</button>
           <button type="button" class="btn btn-ghost" id="cancel-btn" hidden>Cancel</button>
-          <button type="submit" class="btn btn-primary" id="run-btn">Run</button>
+          <button type="button" class="btn btn-primary" id="run-btn">Run</button>
         </div>
-      </form>
+      </div>
       <ol class="steps" id="steps" aria-label="Progress"></ol>
       <ol class="steps-h" id="steps-h" aria-hidden="true"></ol>
       <div class="log-wrap">
