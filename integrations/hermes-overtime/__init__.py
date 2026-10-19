@@ -13,6 +13,10 @@ Configuration (environment, e.g. ``~/.hermes/.env``):
   OVERTIME_TOKEN     the office's ingest token (ot_ing_…)
   OVERTIME_PRIVACY   metadata (default) | args | full
   OVERTIME_TIMEOUT   seconds per POST (default 3)
+
+Remote control is a separate, opt-in module (overtime_control.py, loaded only when
+OVERTIME_REMOTE_APPROVAL=1 or OVERTIME_REMOTE_TASKS=1): answering gateway approvals and starting tasks
+from Overtime. Without those variables this plugin stays observer-only.
 """
 
 from __future__ import annotations
@@ -64,7 +68,7 @@ _SECRET_RES = [
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
     re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),
-    re.compile(r"\bot_(?:ing|view|whs)_[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bot_(?:ing|view|whs|ctl)_[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}"),
 ]
@@ -396,11 +400,50 @@ def _profile_name() -> str:
         return "default"
 
 
+def _load_control_module() -> Any:
+    """overtime_control.py sits next to this file; load it by path (plugin dirs are not always packages)."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overtime_control.py")
+    if not os.path.exists(path):
+        return None
+    spec = importlib.util.spec_from_file_location("hermes_overtime_control", path)
+    if spec is None or spec.loader is None:
+        return None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_APPROVAL_HOOKS = ("pre_approval_request", "post_approval_response")
+
+
 class Plugin:
-    def __init__(self, cfg: Optional[Config] = None, sender: Optional[Sender] = None) -> None:
+    def __init__(self, cfg: Optional[Config] = None, sender: Optional[Sender] = None, control: Any = None) -> None:
         self.cfg = cfg or Config.from_env()
         self.sender = sender or Sender(self.cfg, cost_fn=_hermes_cost)
         self.profile = _profile_name()
+        self.control = control
+        self._control_checked = control is not None
+        self._tls = threading.local()
+        self._last_session = ""
+
+    def _control(self) -> Any:
+        """Remote control (opt-in). Loaded once, only when OVERTIME_REMOTE_APPROVAL / OVERTIME_REMOTE_TASKS is set."""
+        if self._control_checked:
+            return self.control
+        if not self.cfg.ready:
+            return None
+        self._control_checked = True
+        flags = ("OVERTIME_REMOTE_APPROVAL", "OVERTIME_REMOTE_TASKS")
+        if not any((os.environ.get(f) or "").strip().lower() in ("1", "true", "yes", "on") for f in flags):
+            return None
+        try:
+            mod = _load_control_module()
+            if mod is not None:
+                self.control = mod.Control(self.cfg.url, self.cfg.token)
+        except Exception:
+            logger.warning("hermes-overtime: remote control could not start", exc_info=True)
+        return self.control
 
     def _refresh(self) -> None:
         # ~/.hermes/.env may be loaded after the plugin registered
@@ -415,6 +458,23 @@ class Plugin:
                 self._refresh()
                 if not self.cfg.ready:
                     return None
+                sid = kwargs.get("session_id")
+                if isinstance(sid, str) and sid:
+                    self._tls.session = sid
+                    self._last_session = sid
+                elif name in _APPROVAL_HOOKS:
+                    # approval hooks carry a session_key, not the session id: use the agent thread's session
+                    kwargs = {**kwargs, "session_id": getattr(self._tls, "session", "") or self._last_session or kwargs.get("session_key") or ""}
+                ctl = self._control()
+                if ctl is not None:
+                    try:
+                        ctl.maybe_start_tasks()
+                        if name == "pre_approval_request":
+                            ctl.approver.on_request(kwargs, str(kwargs.get("session_id") or ""))
+                        elif name == "post_approval_response":
+                            ctl.approver.on_response(kwargs)
+                    except Exception:
+                        logger.debug("hermes-overtime control hook %s failed", name, exc_info=True)
                 env = build_envelope(name, kwargs, self.cfg.privacy, self.profile)
                 if name == "post_api_request":
                     env["extra"]["_pricing"] = {"model": kwargs.get("response_model") or kwargs.get("model"), "provider": kwargs.get("provider"), "base_url": kwargs.get("base_url"), "usage": env["extra"].get("usage")}
@@ -439,9 +499,25 @@ class Plugin:
         except Exception as exc:
             link = f"(could not fetch the viewer link: {type(exc).__name__})"
         s = self.sender.stats
+        ctl = self._control()
         return (f"Overtime office: {link}\n"
                 f"privacy={self.cfg.privacy} · sent {s['sent']} · dropped {s['dropped']}"
-                + (f" · last error {s['last_error']}" if s["last_error"] else ""))
+                + (f" · last error {s['last_error']}" if s["last_error"] else "")
+                + (f"\nremote control: {ctl.status()}" if ctl is not None else ""))
+
+    def run_bridge(self) -> str:
+        """`hermes overtime bridge`: accept tasks from Overtime in the foreground (outside the gateway)."""
+        self._refresh()
+        os.environ["OVERTIME_BRIDGE"] = "1"
+        ctl = self._control()
+        if ctl is None or not ctl.tasks.ready:
+            return "Set OVERTIME_REMOTE_TASKS=1 (and OVERTIME_URL / OVERTIME_TOKEN) in ~/.hermes/.env first."
+        print(f"Accepting tasks from Overtime; starting them through {ctl.cfg.api_url}. Ctrl+C to stop.")
+        try:
+            ctl.tasks.loop()
+        except KeyboardInterrupt:
+            ctl.tasks.stop()
+        return "stopped"
 
     def send_test(self) -> str:
         self._refresh()
@@ -473,6 +549,15 @@ def register(ctx: Any) -> None:
     for name in OBSERVER_HOOKS:
         if name in valid:  # older Hermes releases know fewer hooks; never register unknown names
             ctx.register_hook(name, plugin.hook(name))
+    try:
+        ctl = plugin._control()
+        if ctl is not None and not ctl.maybe_start_tasks() and ctl.tasks.ready:
+            # the gateway may import after plugins load: look again shortly
+            timer = threading.Timer(15.0, ctl.maybe_start_tasks)
+            timer.daemon = True
+            timer.start()
+    except Exception:
+        logger.debug("hermes-overtime: control start failed", exc_info=True)
 
     def _slash(raw_args: str = "", **_: Any) -> str:
         return plugin.send_test() if raw_args.strip() == "test" else plugin.viewer_link()
@@ -485,10 +570,11 @@ def register(ctx: Any) -> None:
 
     if hasattr(ctx, "register_cli_command"):
         def _setup(p: Any) -> None:
-            p.add_argument("action", nargs="?", default="link", choices=["link", "test"], help="link: print the viewer URL; test: send a test session")
+            p.add_argument("action", nargs="?", default="link", choices=["link", "test", "bridge"], help="link: print the viewer URL; test: send a test session; bridge: accept tasks from Overtime in the foreground")
 
         def _run(args: Any) -> None:
-            print(plugin.send_test() if getattr(args, "action", "link") == "test" else plugin.viewer_link())
+            action = getattr(args, "action", "link")
+            print(plugin.send_test() if action == "test" else plugin.run_bridge() if action == "bridge" else plugin.viewer_link())
 
         try:
             ctx.register_cli_command("overtime", "Overtime pixel-office viewer for this agent", _setup, _run, description="Print the Overtime viewer link or send a test event")

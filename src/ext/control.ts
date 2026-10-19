@@ -92,7 +92,7 @@ export function controlToken(): string {
 
 /** Device names end up in signed strings and the audit log: keep them to a safe alphabet. */
 export function cleanDeviceName(s: unknown): string {
-  const t = (typeof s === "string" ? s : "").replace(/[^\w .()·-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, LIMITS_CONTROL.deviceName);
+  const t = (typeof s === "string" ? s : "").replace(/[^\w .()·-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, LIMITS_CONTROL.deviceName).trim();
   return t || "Unnamed device";
 }
 
