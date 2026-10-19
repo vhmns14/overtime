@@ -341,3 +341,12 @@ def test_plain_http_to_a_public_host_is_flagged():
     assert ho.insecure_remote("http://203.0.113.5:8787/api/ext/runs/of-x/hermes")
     for ok in ("https://x.example/api", "http://127.0.0.1:8787/a", "http://localhost:8787", "http://192.168.1.4:8787", "http://10.0.0.2", "http://[::1]:8787/"):
         assert not ho.insecure_remote(ok)
+
+
+def test_tls_is_always_verified():
+    """No code path turns certificate checks off (urllib verifies by default)."""
+    root = Path(__file__).resolve().parents[1]
+    for f in ("__init__.py", "overtime_control.py"):
+        src = (root / f).read_text()
+        for bad in ("_create_unverified_context", "CERT_NONE", "check_hostname = False", "verify=False"):
+            assert bad not in src, (f, bad)
