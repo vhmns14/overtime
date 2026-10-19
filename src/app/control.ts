@@ -82,15 +82,33 @@ export class ControlController {
     if (!office) { this.renderAll(); return; }
     const h = new URLSearchParams(location.hash.slice(1));
     const c = h.get("c");
-    if (c && /^ot_ctl_[\w-]{16,}$/.test(c)) {
-      this.save({ token: c, deviceId: "", deviceName: "" });
+    const p = h.get("p");
+    if (c || p) {
+      // the secret leaves the address bar (and history) before anything else happens
       h.delete("c");
+      h.delete("p");
       history.replaceState(null, "", `${location.pathname}${location.search}#${h.toString()}`);
+    }
+    if (c && /^ot_ctl_[\w-]{16,}$/.test(c)) {
+      // links made before one-time pairing carried a device token directly
+      this.save({ token: c, deviceId: "", deviceName: "" });
       this.host.toast("This device can now answer Hermes' approvals and send tasks.");
     }
     this.creds = store.getJSON<Creds | null>(KEY(office.id), null);
+    if (p && /^ot_pair_[\w-]{16,}$/.test(p)) { void this.claim(p); this.renderAll(); return; }
     void this.refresh();
     this.renderAll();
+  }
+
+  /** Swaps a one-time pairing code (from a pairing link) for this device's own control token. */
+  private async claim(code: string) {
+    type Claimed = { controlToken?: string; deviceId?: string; deviceName?: string; error?: string };
+    const r: { status: number; json: Claimed } = await this.api<Claimed>("POST", "devices/claim", { code }, "").catch(() => ({ status: 0, json: { error: "network error" } }));
+    if (r.status === 201 && r.json.controlToken) {
+      this.save({ token: r.json.controlToken, deviceId: String(r.json.deviceId ?? ""), deviceName: String(r.json.deviceName ?? "") });
+      this.host.toast("This device can now answer Hermes' approvals and send tasks.");
+    } else this.host.toast(r.json?.error ?? `Pairing failed (HTTP ${r.status}).`);
+    await this.refresh();
   }
 
   detach() {
@@ -254,11 +272,13 @@ export class ControlController {
         <p class="approval-title"><b>Hermes asks for approval</b> ${other}</p>
         <p class="hx-pending">${esc(a.description || "A command needs approval")}</p>
         <pre class="diff"><span>${esc(a.command)}</span></pre>
+        ${a.truncated ? `<p class="err ctl-warn" role="alert">This command is too long to show in full. Approve it in Hermes itself; here you can only deny it.</p>` : ""}
+        ${a.redacted ? `<p class="cost-meta ctl-warn">Parts that look like secrets are hidden as [redacted]. If you are unsure what they are, answer in Hermes.</p>` : ""}
         <div class="actions ctl-actions">
-          <button type="button" class="btn btn-primary" data-ctl="once" ${busy ? "disabled" : ""}>Approve once</button>
+          <button type="button" class="btn btn-primary" data-ctl="once" ${busy || a.truncated ? "disabled" : ""}>Approve once</button>
           <button type="button" class="btn" data-ctl="deny" ${busy ? "disabled" : ""}>Deny</button>
         </div>
-        <div class="ctl-more"><button type="button" class="link-btn" data-ctl="session" ${busy ? "disabled" : ""}>Approve for the rest of this session</button>
+        <div class="ctl-more"><button type="button" class="link-btn" data-ctl="session" ${busy || a.truncated ? "disabled" : ""}>Approve for the rest of this session</button>
         <span class="cost-meta" data-countdown>Hermes keeps asking in its own UI too · first answer wins · falls back in ${mmss(a.expiresAt - now)}</span></div>
       </div>`;
     }).join("");
@@ -455,7 +475,7 @@ export class ControlController {
       <h3>Devices</h3>
       <ul class="ctl-devices">${s.devices.map((d) => `<li data-id="${esc(d.id)}"><b>${esc(d.name)}</b>${d.current ? " (this device)" : ""}<br><span class="cost-meta">paired ${esc(when(d.createdAt))} · last seen ${esc(when(d.lastSeen))}</span>${d.current ? "" : ` <button type="button" class="link-btn" data-revoke>Remove</button>`}</li>`).join("")}</ul>
       <div class="ctl-pair"><label class="field"><span>Pair a phone</span><input data-f="pair-name" placeholder="My phone" maxlength="40"></label><button type="button" class="btn btn-sm" data-act="pair">Create pairing link</button></div>
-      ${this.pairLink ? `<div class="hx-snippet"><pre data-pairlink>${esc(this.pairLink)}</pre><button type="button" class="btn btn-sm" data-copy-pair>Copy</button></div><p>Open it on the phone (it contains that phone's control token: send it privately, it is shown once). The token leaves the address bar as soon as the page opens.</p>` : ""}
+      ${this.pairLink ? `<div class="hx-snippet"><pre data-pairlink>${esc(this.pairLink)}</pre><button type="button" class="btn btn-sm" data-copy-pair>Copy</button></div><p>Open it on the phone within 10 minutes. It works <b>once</b>: the phone swaps it for its own control token, and the code leaves the address bar as soon as the page opens. Send it privately.</p>` : ""}
 
       <h3>Audit log</h3>
       ${audit ? `<p class="${audit.ok ? "ctl-ok" : "err"}">${audit.ok ? `Signature chain verified in this browser (${audit.entries.length} entries, ECDSA P-256).` : `Verification failed: ${esc(audit.error ?? "")}`}</p>

@@ -17,7 +17,7 @@ import { redactString } from "../../src/ext/redact";
 import { spendNow } from "../../src/insights/aggregate";
 import { insightEvents } from "./insights";
 import {
-  LIMITS_CONTROL, REMOTE_CHOICES, auditHash, cleanDeviceName, controlToken, isChoice, newAuditKeys, randomId, signAudit,
+  LIMITS_CONTROL, REMOTE_CHOICES, auditHash, cleanDeviceName, controlToken, isChoice, newAuditKeys, pairingCode, randomId, signAudit,
   signCommand, signDecision, validatePrompt, verifyAudit,
   type ApprovalStatus, type ApprovalView, type AuditEntry, type CommandStatus, type CommandView, type DeviceView,
 } from "../../src/ext/control";
@@ -53,6 +53,7 @@ const OPS: Record<string, { method: "GET" | "POST"; re: RegExp }> = {
   state: { method: "GET", re: /^state$/ },
   enable: { method: "POST", re: /^enable$/ },
   pair: { method: "POST", re: /^devices$/ },
+  claim: { method: "POST", re: /^devices\/claim$/ },
   revoke: { method: "POST", re: /^devices\/([\w-]+)\/revoke$/ },
   policy: { method: "POST", re: /^policy$/ },
   "approval.create": { method: "POST", re: /^approvals$/ },
@@ -86,6 +87,7 @@ export async function handleControl(req: Request, env: ExtEnv, url: URL): Promis
   if (req.method !== spec.method) return ok({ error: "method not allowed" }, 405);
   let body: Record<string, any> | undefined;
   if (req.method === "POST") {
+    if (Number(req.headers.get("content-length") ?? "0") > 16_384) return ok({ error: "body too large" }, 413);
     const text = await req.text();
     if (text.length > 16_384) return ok({ error: "body too large" }, 413);
     try { body = text ? JSON.parse(text) : {}; } catch { return ok({ error: "invalid JSON" }, 400); }
@@ -97,6 +99,12 @@ export async function handleControl(req: Request, env: ExtEnv, url: URL): Promis
 }
 
 const now = () => Date.now();
+/** how long a pairing link works, once */
+export const PAIRING_TTL_MS = 10 * 60_000;
+/** rows kept per control table (newest first); pending approvals and open tasks are never pruned */
+export const CONTROL_CAPS = { audit: 5000, sent: 2000, approvals: 500, commands: 500, devices: 50 };
+/** an approval command longer than this cannot be shown in full, so it can only be denied remotely */
+export const APPROVAL_SHOW_CHARS = 4000;
 const clip = (s: unknown, n: number) => { const t = typeof s === "string" ? s : ""; return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 
 export class ControlOffice extends ExtOffice {
@@ -104,6 +112,8 @@ export class ControlOffice extends ExtOffice {
   private lastSeenWrite = new Map<string, number>();
   /** in-flight notification deliveries (tests await them) */
   readonly outbox: Promise<unknown>[] = [];
+  /** audit entries are appended one at a time: concurrent appends would reuse a seq and fork the chain */
+  private auditTail: Promise<unknown> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: ControlEnv) {
     super(ctx, env);
@@ -116,6 +126,10 @@ export class ControlOffice extends ExtOffice {
       sql.exec("CREATE TABLE IF NOT EXISTS ctl_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, detail TEXT NOT NULL, by_name TEXT NOT NULL, prev TEXT NOT NULL, hash TEXT NOT NULL, sig TEXT NOT NULL)");
       sql.exec("CREATE TABLE IF NOT EXISTS ctl_push (endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, device TEXT NOT NULL, created INTEGER NOT NULL)");
       sql.exec("CREATE TABLE IF NOT EXISTS ctl_sent (id INTEGER PRIMARY KEY AUTOINCREMENT, k TEXT NOT NULL, channel TEXT NOT NULL, at INTEGER NOT NULL, trig TEXT NOT NULL, result TEXT NOT NULL)");
+      // one-time pairing codes (hashed): a pairing link is good for one device, for PAIRING_TTL_MS
+      sql.exec("CREATE TABLE IF NOT EXISTS ctl_pairings (hash TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL, by_name TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0)");
+      // approvals whose command could not be shown in full (truncated) or had parts hidden as secrets
+      if (!sql.exec<{ name: string }>("PRAGMA table_info(ctl_approvals)").toArray().some((c) => c.name === "flags")) sql.exec("ALTER TABLE ctl_approvals ADD COLUMN flags TEXT");
     });
   }
 
@@ -178,7 +192,12 @@ export class ControlOffice extends ExtOffice {
     if (!k) { k = await newAuditKeys(); this.setKv("audit_keys", k); }
     return k;
   }
-  private async audit(kind: string, subject: string, detail: string, by: string) {
+  private audit(kind: string, subject: string, detail: string, by: string): Promise<void> {
+    const run = this.auditTail.then(() => this.appendAudit(kind, subject, detail, by));
+    this.auditTail = run.catch(() => undefined);
+    return run;
+  }
+  private async appendAudit(kind: string, subject: string, detail: string, by: string) {
     const keys = await this.auditKeys();
     const sql = this.ctx.storage.sql;
     const last = sql.exec<{ seq: number; hash: string }>("SELECT seq, hash FROM ctl_audit ORDER BY seq DESC LIMIT 1").toArray()[0];
@@ -186,6 +205,19 @@ export class ControlOffice extends ExtOffice {
     const hash = await auditHash(e);
     const sig = await signAudit(keys.privateJwk, hash);
     sql.exec("INSERT INTO ctl_audit (seq, at, kind, subject, detail, by_name, prev, hash, sig) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", e.seq, e.at, e.kind, e.subject, e.detail, e.by, e.prev, hash, sig);
+    if (e.seq % 50 === 0) this.pruneControl();
+  }
+
+  /** Storage caps for the control tables (an office lives for months; nothing here may grow without bound). */
+  pruneControl(t = now()) {
+    const sql = this.ctx.storage.sql;
+    const C = CONTROL_CAPS;
+    sql.exec("DELETE FROM ctl_audit WHERE seq <= (SELECT MAX(seq) FROM ctl_audit) - ?", C.audit);
+    sql.exec("DELETE FROM ctl_sent WHERE id <= (SELECT MAX(id) FROM ctl_sent) - ?", C.sent);
+    sql.exec("DELETE FROM ctl_approvals WHERE status != 'pending' AND id NOT IN (SELECT id FROM ctl_approvals ORDER BY created DESC LIMIT ?)", C.approvals);
+    sql.exec("DELETE FROM ctl_commands WHERE status NOT IN ('queued','claimed','started') AND id NOT IN (SELECT id FROM ctl_commands ORDER BY created DESC LIMIT ?)", C.commands);
+    sql.exec("DELETE FROM ctl_pairings WHERE expires < ? OR used = 1", t - 86_400_000);
+    sql.exec("DELETE FROM ctl_devices WHERE revoked = 1 AND id NOT IN (SELECT id FROM ctl_devices ORDER BY created DESC LIMIT ?)", C.devices);
   }
   private auditRows(limit = 200): AuditEntry[] {
     return this.ctx.storage.sql.exec<Record<string, any>>("SELECT seq, at, kind, subject, detail, by_name, prev, hash, sig FROM ctl_audit ORDER BY seq DESC LIMIT ?", limit).toArray()
@@ -216,14 +248,35 @@ export class ControlOffice extends ExtOffice {
         return { status: 201, body: { ...out, policy: this.policy() } };
       }
       case "pair": {
+        // a one-time pairing code, not a device token: the link works once, for PAIRING_TTL_MS, and
+        // the new device gets its own control token when it claims it (a leaked old link is worthless)
         const bad = needDevice();
         if (bad) return bad;
         if (this.activeDevices() >= LIMITS_CONTROL.maxDevices) return { status: 409, body: { error: `at most ${LIMITS_CONTROL.maxDevices} devices` } };
+        const t = now();
+        this.ctx.storage.sql.exec("DELETE FROM ctl_pairings WHERE expires < ? OR used = 1", t);
+        const open = this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM ctl_pairings").one().n;
+        if (open >= 5) return { status: 429, body: { error: "too many unused pairing links; wait for them to expire" } };
         const name = cleanDeviceName(b.name);
-        const out = await this.addDevice(name);
-        await this.audit("device.added", out.deviceId, name, dev!.name);
+        const code = pairingCode();
+        const expiresAt = t + PAIRING_TTL_MS;
+        this.ctx.storage.sql.exec("INSERT INTO ctl_pairings (hash, name, created, expires, by_name) VALUES (?, ?, ?, ?, ?)", await sha256Hex(code), name, t, expiresAt, dev!.name);
+        await this.audit("device.pairing", "pairing", `link for ${name}, valid 10 min, once`, dev!.name);
+        return { status: 201, body: { pairingCode: code, deviceName: name, expiresAt, watch: `${r.origin}/watch/${this.cfg.id}#v=${this.cfg.viewToken}&p=${code}` } };
+      }
+      case "claim": {
+        // no token: the pairing code in the body is the credential
+        const code = typeof b.code === "string" ? b.code : "";
+        if (!/^ot_pair_[\w-]{16,}$/.test(code)) return { status: 400, body: { error: "a pairing code (ot_pair_…) is required" } };
+        const h = await sha256Hex(code);
+        const t = now();
+        const row = this.ctx.storage.sql.exec<{ name: string; by_name: string }>("UPDATE ctl_pairings SET used = 1 WHERE hash = ? AND used = 0 AND expires >= ? RETURNING name, by_name", h, t).toArray()[0];
+        if (!row) return { status: 410, body: { error: "this pairing link was already used or has expired; make a new one on a paired device" } };
+        if (this.activeDevices() >= LIMITS_CONTROL.maxDevices) return { status: 409, body: { error: `at most ${LIMITS_CONTROL.maxDevices} devices` } };
+        const out = await this.addDevice(row.name);
+        await this.audit("device.added", out.deviceId, row.name, row.by_name);
         this.ping();
-        return { status: 201, body: { ...out, watch: `${r.origin}/watch/${this.cfg.id}#v=${this.cfg.viewToken}&c=${out.controlToken}` } };
+        return { status: 201, body: out };
       }
       case "revoke": {
         const bad = needDevice();
@@ -262,13 +315,15 @@ export class ControlOffice extends ExtOffice {
         if (typeof b.command !== "string" || !b.command) return { status: 400, body: { error: "command is required" } };
         if (this.ctx.storage.sql.exec("SELECT 1 FROM ctl_approvals WHERE id = ?", id).toArray().length) return { status: 409, body: { error: "duplicate request_id" } };
         const commandSha = await sha256Hex(b.command);
+        const shown = redactString(b.command);
+        const flags = [...(b.command.length > APPROVAL_SHOW_CHARS ? ["truncated"] : []), ...(shown !== b.command ? ["redacted"] : [])].join(",") || null;
         const ttl = Math.max(10, Math.min(LIMITS_CONTROL.approvalMaxS, Number(b.expires_in) || 120));
         const t = now();
         const session = typeof b.session === "string" ? clip(b.session, 128) : "default";
         const surface = typeof b.surface === "string" ? clip(b.surface, 16) : "gateway";
         this.ctx.storage.sql.exec(
-          "INSERT INTO ctl_approvals (id, session, surface, command, command_sha, description, created, expires, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
-          id, session, surface, clip(redactString(b.command), 2000), commandSha, clip(redactString(String(b.description ?? "")), 300), t, t + ttl * 1000,
+          "INSERT INTO ctl_approvals (id, session, surface, command, command_sha, description, created, expires, status, flags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+          id, session, surface, clip(shown, APPROVAL_SHOW_CHARS), commandSha, clip(redactString(String(b.description ?? "")), 300), t, t + ttl * 1000, flags,
         );
         await this.audit("approval.requested", id, clip(String(b.description ?? b.command), 120), "hermes");
         this.ping();
@@ -295,9 +350,13 @@ export class ControlOffice extends ExtOffice {
         const row = this.approvalRow(r.id!);
         if (!row) return { status: 404, body: { error: "unknown approval" } };
         if (row.status !== "pending") return { status: row.status === "expired" ? 410 : 409, body: { error: `already ${row.status}`, status: row.status } };
+        // what you cannot see in full you cannot approve: a truncated command can only be denied here
+        if (b.choice !== "deny" && String(row.flags ?? "").split(",").includes("truncated")) return { status: 409, body: { error: "this command is too long to show in full; approve it in Hermes itself (you can deny it here)", code: "truncated" } };
         const at = now();
         const sig = await signDecision(this.cfg.ingestHash, this.cfg.id, row.id, row.command_sha, b.choice, dev!.name, at);
-        this.ctx.storage.sql.exec("UPDATE ctl_approvals SET status = 'decided', choice = ?, by_device = ?, decided_at = ?, sig = ? WHERE id = ? AND status = 'pending'", b.choice, cleanDeviceName(dev!.name), at, sig, row.id);
+        // the first answer wins: a concurrent second answer (another device) is refused, never reported as applied
+        const won = this.ctx.storage.sql.exec("UPDATE ctl_approvals SET status = 'decided', choice = ?, by_device = ?, decided_at = ?, sig = ? WHERE id = ? AND status = 'pending' RETURNING id", b.choice, cleanDeviceName(dev!.name), at, sig, row.id).toArray();
+        if (!won.length) { const cur = this.approvalRow(row.id); return { status: 409, body: { error: `already ${cur?.status ?? "answered"}`, status: cur?.status } }; }
         await this.audit("approval.decided", row.id, `${b.choice === "deny" ? "Denied" : b.choice === "session" ? "Approved for the session" : "Approved once"}: ${clip(row.description || row.command, 100)}`, dev!.name);
         this.wake(`approval:${row.id}`);
         this.ping();
@@ -462,7 +521,7 @@ export class ControlOffice extends ExtOffice {
   }
 
   private approvalRow(id: string) {
-    return this.ctx.storage.sql.exec<{ id: string; session: string; surface: string; command: string; command_sha: string; description: string; created: number; expires: number; status: ApprovalStatus; choice: string | null; by_device: string | null; decided_at: number | null; sig: string | null; outcome: string | null }>(
+    return this.ctx.storage.sql.exec<{ id: string; session: string; surface: string; command: string; command_sha: string; description: string; created: number; expires: number; status: ApprovalStatus; choice: string | null; by_device: string | null; decided_at: number | null; sig: string | null; outcome: string | null; flags: string | null }>(
       "SELECT * FROM ctl_approvals WHERE id = ?", id,
     ).toArray()[0];
   }
@@ -470,13 +529,13 @@ export class ControlOffice extends ExtOffice {
   private expireApprovals() {
     const t = now();
     const rows = this.ctx.storage.sql.exec<{ id: string }>("UPDATE ctl_approvals SET status = 'expired' WHERE status = 'pending' AND expires < ? RETURNING id", t).toArray();
-    for (const r of rows) { void this.audit("approval.expired", r.id, "", "overtime"); this.wake(`approval:${r.id}`); }
+    for (const r of rows) { this.audit("approval.expired", r.id, "", "overtime").catch(() => undefined); this.wake(`approval:${r.id}`); }
     if (rows.length) this.ping();
   }
 
   private loseStaleClaims() {
     const rows = this.ctx.storage.sql.exec<{ id: string }>("UPDATE ctl_commands SET status = 'lost', updated = ? WHERE status = 'claimed' AND claimed_at < ? RETURNING id", now(), now() - LIMITS_CONTROL.commandLeaseMs).toArray();
-    for (const r of rows) void this.audit("command.lost", r.id, "never confirmed as started; not retried", "overtime");
+    for (const r of rows) this.audit("command.lost", r.id, "never confirmed as started; not retried", "overtime").catch(() => undefined);
   }
 
   private nextQueued() {
@@ -488,6 +547,7 @@ export class ControlOffice extends ExtOffice {
     const approvals: ApprovalView[] = sql.exec<any>("SELECT * FROM ctl_approvals ORDER BY (status = 'pending') DESC, created DESC LIMIT 20").toArray().map((a) => ({
       id: a.id, session: a.session, surface: a.surface, command: a.command, description: a.description, createdAt: a.created, expiresAt: a.expires, status: a.status,
       choice: a.choice ?? undefined, by: a.by_device ?? undefined, decidedAt: a.decided_at ?? undefined, outcome: a.outcome ?? undefined,
+      ...(String(a.flags ?? "").includes("truncated") ? { truncated: true } : {}), ...(String(a.flags ?? "").includes("redacted") ? { redacted: true } : {}),
     }));
     const commands: CommandView[] = sql.exec<any>("SELECT * FROM ctl_commands ORDER BY created DESC LIMIT 20").toArray().map((c) => ({
       id: c.id, kind: c.kind, prompt: c.kind === "run" ? c.prompt : "", target: c.target ?? undefined, status: c.status, createdAt: c.created, by: c.by_device, runId: c.run_id ?? undefined, error: c.error ?? undefined, updatedAt: c.updated,

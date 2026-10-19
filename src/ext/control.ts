@@ -47,6 +47,10 @@ export interface ApprovalView {
   by?: string;
   decidedAt?: number;
   outcome?: string;
+  /** the command was longer than Overtime shows: it can only be denied remotely */
+  truncated?: boolean;
+  /** parts of the command were hidden because they look like secrets */
+  redacted?: boolean;
 }
 
 export interface CommandView {
@@ -90,6 +94,11 @@ export function controlToken(): string {
   return `ot_ctl_${btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
 }
 
+/** A one-time pairing code (the pairing link carries it; the device swaps it for its own control token). */
+export function pairingCode(): string {
+  return controlToken().replace(/^ot_ctl_/, "ot_pair_");
+}
+
 /** Device names end up in signed strings and the audit log: keep them to a safe alphabet. */
 export function cleanDeviceName(s: unknown): string {
   const t = (typeof s === "string" ? s : "").replace(/[^\w .()·-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, LIMITS_CONTROL.deviceName).trim();
@@ -108,6 +117,8 @@ export function validatePrompt(s: unknown): { ok: true; prompt: string } | { ok:
   if (p.length > LIMITS_CONTROL.promptChars) return { ok: false, error: `the prompt is longer than ${LIMITS_CONTROL.promptChars} characters` };
   // eslint-disable-next-line no-control-regex
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(p)) return { ok: false, error: "the prompt contains control characters" };
+  // bidi overrides/isolates make the confirmation screen show something other than what is sent
+  if (/[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c]/.test(p)) return { ok: false, error: "the prompt contains invisible text-direction characters" };
   return { ok: true, prompt: p };
 }
 
@@ -193,6 +204,7 @@ export function describeAudit(e: Pick<AuditEntry, "kind" | "detail" | "by">): st
   const map: Record<string, string> = {
     "control.enabled": "Remote control enabled",
     "device.added": "Device paired",
+    "device.pairing": "Pairing link made",
     "device.revoked": "Device removed",
     "policy.changed": "Remote control settings changed",
     "notify.changed": "Notification settings changed",

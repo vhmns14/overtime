@@ -190,7 +190,8 @@ test("pair a phone with a link; a plain viewer link can never approve", async ({
   await ov.locator('[data-f="pair-name"]').fill("Pixel 8");
   await ov.locator('[data-act="pair"]').click();
   const link = (await ov.locator("[data-pairlink]").textContent())!;
-  expect(link).toMatch(new RegExp(`/watch/${c.runId}#v=${c.viewToken}&c=ot_ctl_`));
+  expect(link).toMatch(new RegExp(`/watch/${c.runId}#v=${c.viewToken}&p=ot_pair_`));
+  expect(link).not.toContain("ot_ctl_"); // a one-time pairing code, never a device token
   await ov.locator("[data-close]").click();
 
   const command = "docker compose down -v";
@@ -213,7 +214,7 @@ test("pair a phone with a link; a plain viewer link can never approve", async ({
   const pErrors = trackErrors(phone);
   await phone.goto(link.replace(/^https?:\/\/[^/]+/, ""));
   await expect(phone.locator("#ctl-approval")).toBeVisible();
-  expect(phone.url()).not.toContain("ot_ctl_"); // the token leaves the address bar
+  expect(phone.url()).not.toContain("ot_pair_"); // the code leaves the address bar
   await expect(phone.locator("#hermes-box")).toContainText("remote control on");
   if (SHOTS) { await expect(phone.locator(".toast")).toHaveCount(0, { timeout: 6000 }).catch(() => undefined); await phone.screenshot({ path: "docs/control-phone-approval-mobile.png" }); }
   await phone.locator('#ctl-approval [data-ctl="deny"]').click();
@@ -223,5 +224,12 @@ test("pair a phone with a link; a plain viewer link can never approve", async ({
   const r = await ctl(request, c, "get", `approvals/${rid}`);
   expect(r.json.decision).toMatchObject({ choice: "deny", by: "Pixel 8" });
   await phone.close();
-  expect([...errors, ...vErrors, ...pErrors]).toEqual([]);
+  // the same link a second time (someone who saw it later) pairs nothing
+  const late = await browser.newPage();
+  const lErrors = trackErrors(late);
+  await late.goto(link.replace(/^https?:\/\/[^/]+/, ""));
+  await expect(late.locator(".toast")).toContainText(/already used or has expired/);
+  await expect(late.locator("#ctl-approval [data-ctl]")).toHaveCount(0);
+  await late.close();
+  expect([...errors, ...vErrors, ...pErrors, ...lErrors.filter((e) => !/status of 410/.test(e))]).toEqual([]);
 });
