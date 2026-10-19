@@ -220,8 +220,9 @@ the Hermes machine (`OVERTIME_REMOTE_APPROVAL=1`, `OVERTIME_REMOTE_TASKS=1`).
 | control (`ot_ctl_…`, one per paired device) | decide approvals, queue/cancel tasks, change policy and notifications, pair/revoke devices, read the audit log |
 
 Control tokens are stored as SHA-256 hashes and revocable. A pairing link is
-`/watch/<office>#v=<view>&c=<control>`; the app moves the control token to local storage and removes
-it from the address bar.
+`/watch/<office>#v=<view>&p=<ot_pair_…>`: a one-time code (hashed, valid 10 minutes) that the new
+device swaps for its own control token with `POST devices/claim {"code"}`. The app removes it from the
+address bar before anything else. A write-capable token is never accepted in a query string.
 
 ### Routes (`/api/ext/runs/:id/control/…`)
 
@@ -257,9 +258,12 @@ command:  v1|command|<office>|<id>|<kind>|<sha256(payload)>|<created_at ms>
 
 The plugin applies a decision only if the signature verifies, `request_id` is its own,
 `command_sha256` matches the command it registered, the choice is `once`/`session`/`deny`, and the
-head of Hermes' gateway approval queue for that session is still that command. It then calls
-`tools.approval.resolve_gateway_approval(session_key, choice)`. Anything else, including a timeout
-or a network error, leaves the approval to Hermes.
+queue entry it pinned when Hermes asked is still waiting for that command. It then answers exactly
+that entry under Hermes' own lock (what `tools.approval.resolve_gateway_approval(session_key, choice)`
+does for the head of the queue). Anything else, including a timeout, an answer arriving after the
+wait, or a network error, leaves the approval to Hermes. Approvals whose command is longer than
+Overtime shows (4000 characters) are flagged `truncated` and can only be denied remotely; `redacted`
+marks a command with parts hidden as secrets.
 
 ### Audit log
 

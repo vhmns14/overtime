@@ -78,6 +78,8 @@ curl -fsS http://127.0.0.1:8787/api/health
 
 Upgrading later: `git pull && docker compose up -d --build`. The volume keeps every office and building.
 
+The port is published on `127.0.0.1` only (`OVERTIME_BIND`, default `127.0.0.1`): a reverse proxy or tunnel on the same machine reaches it, the internet does not. Settings from `.env` reach the Worker through a private file, never the process list; `.env` is git-ignored.
+
 Without Docker, on any machine with Node 20+: `npm ci && npm run build && npm run selfhost` (data in `./.overtime-data`, or set `OVERTIME_DATA`). The same environment variables apply.
 
 ### A3. Make it reachable from Hermes
@@ -85,7 +87,7 @@ Without Docker, on any machine with Node 20+: `npm ci && npm run build && npm ru
 | Where Hermes runs | What to use as `$OT` |
 |---|---|
 | The same machine | `http://127.0.0.1:8787`. Nothing else to do |
-| Another machine on a private network you trust | `http://<server-ip>:8787` (open the port to that network only) |
+| Another machine on a private network you trust | `http://<server-ip>:8787`: the compose file publishes the port on 127.0.0.1 only, so add `OVERTIME_BIND=0.0.0.0` (or the server's private IP) to `.env` and open the port to that network only. Docker-published ports bypass host firewalls such as ufw |
 | Anywhere else (a VPS, a phone you want to approve from) | HTTPS through a reverse proxy or a tunnel, below |
 
 HTTPS is needed for Web Push in the browser and recommended for everything else (tokens travel in headers).
@@ -267,10 +269,10 @@ curl -fsS -X POST $OT/api/ext/runs/<office>/control/enable -H "authorization: Be
 # → {"deviceId":"…","controlToken":"ot_ctl_…",…}
 curl -fsS -X POST $OT/api/ext/runs/<office>/control/policy -H "authorization: Bearer ot_ctl_…" \
   -H 'content-type: application/json' -d '{"remoteApproval":true,"remoteTasks":true}'
-# then hand a pairing link to the human (it opens the office with its own control token):
+# then hand a pairing link to the human (a one-time code, valid 10 minutes; the phone swaps it for its own control token):
 curl -fsS -X POST $OT/api/ext/runs/<office>/control/devices -H "authorization: Bearer ot_ctl_…" \
   -H 'content-type: application/json' -d '{"name":"My phone"}'
-# → {"watch":"$OT/watch/<office>#v=…&c=ot_ctl_…",…}   send this link privately; it is shown once
+# → {"watch":"$OT/watch/<office>#v=…&p=ot_pair_…","expiresAt":…}   send this link privately; it works once
 ```
 
 Prefer the browser when a human is around: a control token belongs to whoever holds it.
@@ -312,6 +314,7 @@ Optional on the Hermes side:
 | `API_SERVER_PORT` / `OVERTIME_HERMES_API` | `8642` / `http://127.0.0.1:$API_SERVER_PORT` |
 | `OVERTIME_REMOTE_COMMANDS` | `run,stop` (allowed task kinds) |
 | `OVERTIME_ALLOW_SLASH` | off (prompts starting with `/` are refused) |
+| `OVERTIME_TASK_MAX_AGE` | `3600` (seconds; older queued tasks are refused) |
 | `OVERTIME_TASK_MAX_CHARS` | `4000` |
 
 The API server listens on `127.0.0.1` by default. Keep it that way: the bridge calls it locally, and nothing needs to reach it from outside.

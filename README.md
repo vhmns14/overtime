@@ -90,7 +90,7 @@ Off by default. Turn it on per office in **Remote control**, and on the Hermes m
 1. Hermes' gateway queues the approval, fires the `pre_approval_request` hook and blocks the agent thread until someone answers (`tools/approval.py`).
 2. The plugin registers that request with your office and long-polls for an answer in a background thread (25 s polls, up to Hermes' own `approvals.timeout` minus 5 s, or `OVERTIME_APPROVAL_WAIT`).
 3. A paired device answers. The office signs the decision with HMAC-SHA256 (key: SHA-256 of the office's ingest token) and binds it to the request id and the SHA-256 of the exact command.
-4. The plugin verifies all of that, checks that the approval at the head of Hermes' queue is still this command, and resolves it with `tools.approval.resolve_gateway_approval(session_key, choice)`: the same call behind Hermes' own `/approve`, `/deny` and `POST /v1/runs/{id}/approval`.
+4. The plugin verifies all of that and answers exactly the queue entry it pinned when Hermes asked (never whatever happens to be first in the queue by then): under Hermes' own lock it checks that this entry is still waiting for this command, removes it and wakes it, the same way `tools.approval.resolve_gateway_approval(session_key, choice)` (behind Hermes' own `/approve`, `/deny` and `POST /v1/runs/{id}/approval`) does. A command too long for Overtime to show in full can only be denied remotely.
 
 Hermes keeps asking in its own UI the whole time; the first answer wins (an answer given in Hermes cancels the remote wait). **On timeout, a network error, a bad signature or anything unexpected the plugin does nothing** and Hermes' normal approval carries on. Overtime never approves on its own, never offers *always* (permanent allowlist entries stay a local decision), and CLI sessions stay in the terminal: the CLI prompt reads stdin and has no remote resolver in 0.19.
 
@@ -102,7 +102,7 @@ Hermes keeps asking in its own UI the whole time; the first answer wins (an answ
 
 Per-trigger toggles, quiet hours in your time zone, one message per alert per 10 minutes and at most 12 per hour per channel. Every message links to the office's `/watch` viewer.
 
-**Devices and tokens.** The first device is paired with the office's ingest token while no device is paired (the owner's tab); after that only a paired device can pair another, with a one-time **pairing link** (`/watch/<office>#v=…&c=ot_ctl_…`; the token leaves the address bar as soon as the page opens). Each device has its own **control token**, stored as a hash, revocable. The viewer link can never approve or send anything; the ingest token on the Hermes machine can only *read* decisions and tasks.
+**Devices and tokens.** The first device is paired with the office's ingest token while no device is paired (the owner's tab); after that only a paired device can pair another, with a one-time **pairing link** (`/watch/<office>#v=…&p=ot_pair_…`): it works once, for 10 minutes, and the new device swaps it for its own control token (the code leaves the address bar as soon as the page opens). Each device has its own **control token**, stored as a hash, revocable. The viewer link can never approve or send anything; the ingest token on the Hermes machine can only *read* decisions and tasks.
 
 **Audit log.** Every control action (pairing, policy changes, approvals requested/answered/applied/timed out, tasks queued/claimed/started/finished) is appended to a SHA-256 hash chain signed with the office's ECDSA P-256 key, with who (device name) and when. The settings screen verifies the whole chain in your browser.
 
@@ -124,7 +124,8 @@ hermes gateway run              # or restart your gateway service; `hermes overt
 | `OVERTIME_REMOTE_APPROVAL`, `OVERTIME_REMOTE_TASKS` | `1` to opt in (default off; without them the plugin stays observer-only and the control module is not even loaded) |
 | `OVERTIME_APPROVAL_WAIT` | Seconds to wait for Overtime before leaving it to Hermes (default: Hermes' `approvals.timeout` − 5 s, at most 900) |
 | `OVERTIME_REMOTE_COMMANDS` | Allowed task kinds, default `run,stop` |
-| `OVERTIME_ALLOW_SLASH`, `OVERTIME_TASK_MAX_CHARS` | Allow prompts starting with `/` (default no); longest prompt (default 4000) |
+| `OVERTIME_ALLOW_SLASH`, `OVERTIME_TASK_MAX_CHARS` | Allow prompts starting with `/` (default no; checked after Unicode folding and invisible characters, so `／x` or a zero-width space before `/` count too); longest prompt (default 4000) |
+| `OVERTIME_TASK_MAX_AGE` | Refuse tasks queued longer ago than this many seconds (default 3600); a task id is never run twice |
 | `OVERTIME_HERMES_API` | API server base URL (default `http://127.0.0.1:$API_SERVER_PORT`, port 8642) |
 
 Enabling remote approval sends the approval's command text (already redacted by Hermes) to your office whatever the privacy level, since you cannot approve what you cannot see.
@@ -394,6 +395,7 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 - **Secrets.** API keys and GitHub tokens are never stored by the Worker; the proxies forward them in flight only (`Authorization` for the LLM, `x-ot-gh-token` → `Authorization` for GitHub). Nothing logs request bodies or headers. Worker errors never echo request data.
 - **App CSP** (`public/_headers`): `default-src 'self'`, no inline scripts, `frame-ancestors 'none'`. It includes `'unsafe-eval'` for one reason: the Reviewer's JS syntax check *compiles* generated code with `new Function` and never calls it. Without eval, it falls back to a bracket/string/comment balance check.
 - **SSRF.** The proxy and the fetcher refuse loopback, private, link-local and metadata hosts. Local LLMs need the explicit `ALLOW_LOCAL_LLM=1` dev flag.
+- **Audit.** The full security audit (findings, fixes, accepted risks) is in [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md).
 - **External-agent offices.** Ingest and view tokens are random 24-byte values stored as SHA-256 hashes and compared in constant time; they open one office only. Hermes webhooks need a valid HMAC over the raw body and a fresh signed timestamp; repeated deliveries are dropped. Requests are capped at 256 KB and 200 events, offices are rate-limited, strings are clipped, secrets are redacted before storage, and the UI treats every payload as text (escaped). The Hermes plugin registers observer hooks only and cannot change what Hermes does. Remote control is a separate opt-in module on both sides: per-device control tokens (hashed, revocable; the view token never controls), HMAC-signed decisions bound to the request and the command hash, no auto-approval and no remote "always", fallback to Hermes' own approval on any timeout or error, a signed audit log, the Telegram token encrypted at rest, and Web Push only to browser push services.
 
 ## Roadmap
