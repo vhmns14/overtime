@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kopi Senja · Slow coffee at golden hour</title>
+  <meta name="description" content="Kopi Senja is a small neighbourhood coffee bar in Purwokerto serving single-origin Indonesian coffee from 3 pm until late.">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#home">Kopi <span>Senja</span></a>
+    <button class="menu-toggle" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav id="nav" class="nav">
+      <a href="#menu">Menu</a>
+      <a href="#story">Our story</a>
+      <a href="#visit">Visit</a>
+    </nav>
+  </header>
+
+  <main id="home">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="badge">Open 3 pm – 11 pm</p>
+        <h1>Coffee for the hour the sky turns orange.</h1>
+        <p class="lede">Single-origin beans from Gayo, Kintamani and Toraja, brewed slowly while the city winds down.</p>
+        <div class="actions">
+          <a class="btn" href="#menu">See the menu</a>
+          <a class="btn btn-ghost" href="#visit">Find us</a>
+        </div>
+      </div>
+      <img src="img/senja-cup.svg" class="hero-art" width="420" height="420" alt="A glass of iced palm-sugar coffee in front of an orange setting sun">
+    </section>
+
+    <section id="menu" class="menu">
+      <h2>Tonight's menu</h2>
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="coffee">Coffee</button>
+        <button role="tab" aria-selected="false" data-tab="noncoffee">Non-coffee</button>
+        <button role="tab" aria-selected="false" data-tab="snacks">Snacks</button>
+      </div>
+      <ul class="items" data-panel="coffee">
+        <li><span>Es Kopi Senja</span><span>Palm sugar, fresh milk, double shot</span><b>Rp 28k</b></li>
+        <li><span>Gayo Pour-over</span><span>Jasmine, lime zest, brown sugar</span><b>Rp 32k</b></li>
+        <li><span>Kintamani Flat White</span><span>Citrus and cocoa, silky milk</span><b>Rp 30k</b></li>
+        <li><span>Tubruk Toraja</span><span>The old way, thick and earthy</span><b>Rp 20k</b></li>
+      </ul>
+      <ul class="items" data-panel="noncoffee" hidden>
+        <li><span>Wedang Jahe</span><span>Ginger, lemongrass, pandan</span><b>Rp 18k</b></li>
+        <li><span>Teh Tarik</span><span>Pulled black tea, condensed milk</span><b>Rp 20k</b></li>
+        <li><span>Coklat Senja</span><span>Dark chocolate, a pinch of salt</span><b>Rp 26k</b></li>
+      </ul>
+      <ul class="items" data-panel="snacks" hidden>
+        <li><span>Mendoan</span><span>Crispy tempeh, chilli soy dip</span><b>Rp 15k</b></li>
+        <li><span>Pisang Goreng Keju</span><span>Fried banana, cheese, palm sugar</span><b>Rp 22k</b></li>
+        <li><span>Roti Bakar</span><span>Thick toast, kaya and butter</span><b>Rp 20k</b></li>
+      </ul>
+    </section>
+
+    <section id="story" class="story">
+      <h2>Brewed slow, on purpose</h2>
+      <p>Kopi Senja started as a cart outside a bookshop. Today it is twelve seats, one roaster and a long counter facing west, so every cup comes with the sunset.</p>
+      <ul class="facts">
+        <li><b>3</b> origins on rotation</li>
+        <li><b>12</b> seats, no rush</li>
+        <li><b>48h</b> from roast to cup</li>
+      </ul>
+    </section>
+
+    <section id="visit" class="visit">
+      <div>
+        <h2>Visit us</h2>
+        <p>Jl. Senja Raya 17, Purwokerto<br>Every day, 3 pm – 11 pm</p>
+      </div>
+      <form class="reserve" id="reserve">
+        <h3>Save a seat by the window</h3>
+        <label for="name">Name</label>
+        <input id="name" name="name" autocomplete="name" required>
+        <label for="time">Arrival time</label>
+        <input id="time" name="time" type="time" min="15:00" max="22:30" required>
+        <button class="btn" type="submit">Reserve</button>
+        <p class="note" id="reserve-note" role="status"></p>
+      </form>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>© <span id="year">2026</span> Kopi Senja · Made slowly in Purwokerto</p>
+  </footer>
+  <script src="js/main.js"></script>
+</body>
+</html>

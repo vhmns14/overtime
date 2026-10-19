@@ -1,0 +1,35 @@
+{
+  "name": "overtime",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Overtime: watch a team of AI agents build your website in a pixel-art office, and approve the steps that matter.",
+  "license": "MIT",
+  "author": "vhmns · Kode Kecil",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:ui": "vite",
+    "dev:worker": "wrangler dev --port 8787 --ip 127.0.0.1 --local",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "build:preview": "PREVIEW=1 vite build && node scripts/finalize-preview.mjs",
+    "atlas": "python3 scripts/build-atlas.py",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p worker/tsconfig.json",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "parse5": "^7.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261018.1",
+    "@fontsource/inter": "^5.2.5",
+    "@fontsource/jetbrains-mono": "^5.2.5",
+    "@playwright/test": "1.56.1",
+    "typescript": "^5.9.2",
+    "vite": "^6.4.1",
+    "vite-plugin-singlefile": "^2.3.0",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.151.1"
+  }
+}
