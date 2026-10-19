@@ -249,7 +249,7 @@ export class App {
 
   private diffHTML(d?: DiffLine[]) {
     if (!d?.length) return "";
-    return `<pre class="diff">${d.map((l) => `<span class="${l.type}">${l.type === "add" ? "+ " : l.type === "del" ? "- " : "  "}${esc(l.text)}</span>`).join("\n")}</pre>`;
+    return `<pre class="diff">${d.map((l) => `<span class="${l.type}">${l.type === "add" ? "+ " : l.type === "del" ? "- " : "  "}${esc(l.text)}</span>`).join("")}</pre>`;
   }
 
   private showGate(g: GateRequest) {

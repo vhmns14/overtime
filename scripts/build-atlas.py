@@ -1,12 +1,12 @@
 # Slices the generated character sheets (chroma-keyed PNGs) into frames, downsamples them to the
 # office scale with a box filter + hard alpha + per-sprite palette quantisation, normalises facing,
-# and packs everything into public/atlas.png + public/atlas.json. Run: python3 scripts/build-atlas.py
+# and packs everything into src/assets/atlas.png + src/office/atlas.json. Run: npm run atlas
 import json, sys
 from PIL import Image
 import numpy as np
 from scipy import ndimage
 
-SCALE = 0.2
+SCALE = 0.25
 ROLES = ['pm', 'research', 'coder', 'reviewer', 'ops']
 # which component index (row-major) is which pose, per sheet
 MAP = {
@@ -92,8 +92,12 @@ boxes = components(pa)
 boxes = [b for b in boxes if (b[2]-b[0]) > 80]
 for r in ROLES:
   b = boxes[PORTRAIT_TILE[r]]
+  b = (b[0] + 6, b[1] + 6, b[2] - 6, b[3] - 6)  # inset: drop the keyed edge of the tile
   crop = Image.fromarray(pa).crop(b)
   frames[f'{r}_portrait'] = crop.resize((96, round(96*crop.size[1]/crop.size[0])), Image.BOX).convert('RGBA')
+
+# office background: palette-clean 256-colour PNG (no dithering keeps pixel edges crisp)
+Image.open('art/raw/office-empty.png').convert('RGB').quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE).save('src/assets/office.png', optimize=True)
 
 # shelf pack
 pad = 2; W = 1024; x = y = rowh = 0; out = {}
