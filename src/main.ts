@@ -5,8 +5,10 @@ import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-500.css";
 import "@fontsource/jetbrains-mono/latin-700.css";
 import "./styles.css";
+import "./styles-office.css";
 import officeUrl from "./assets/office.png";
 import atlasUrl from "./assets/atlas.png";
+import propsUrl from "./assets/props.png";
 import { App } from "./app/app";
 
 function load(src: string) {
@@ -19,8 +21,8 @@ function load(src: string) {
 }
 
 async function boot() {
-  const [bg, atlas] = await Promise.all([load(officeUrl), load(atlasUrl)]);
-  const app = new App(bg, atlas);
+  const [bg, atlas, props] = await Promise.all([load(officeUrl), load(atlasUrl), load(propsUrl)]);
+  const app = new App(bg, atlas, props);
   app.mount();
   (window as unknown as { __overtime: App }).__overtime = app;
 }

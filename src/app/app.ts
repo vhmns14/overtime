@@ -17,6 +17,12 @@ import { wordmarkSVG } from "../ui/wordmark";
 import { buildGitHub, buildLLM, llmSettings, loadSettings, saveSettings, secrets, type Settings, type Surface } from "./settings";
 import { HermesController } from "./hermes";
 import { deployToWorker, fetchRef, inlinePreview, esc } from "./deploy";
+import { Ambience } from "../office/ambience";
+import { activityConfigFrom } from "../office/activity";
+import { LibraryPanel } from "./library-panel";
+import { localDay } from "../ext/scoreboard";
+import type { OfficeState } from "../ext/office-state";
+import { BuildingController, type OfficeCredsLike } from "../building/controller";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
 
@@ -77,13 +83,22 @@ export class App {
   /** /watch/<office>#v=<view token>: a read-only viewer of someone's Hermes office */
   private watch: { id: string; token: string } | null = null;
 
-  constructor(private bg: HTMLImageElement, private atlas: HTMLImageElement) {
+  /** office reactions: lights, sleep, scoreboard, bookshelf, filing cabinet (src/office/ambience.ts) */
+  private ambience: Ambience | null = null;
+  private library: LibraryPanel | null = null;
+  /** many Hermes, one building (src/building/) */
+  private building: BuildingController | null = null;
+  private buildingLink = BuildingController.fromLocation();
+  private pageWatch: { id: string; token: string } | null = null;
+
+  constructor(private bg: HTMLImageElement, private atlas: HTMLImageElement, private props?: HTMLImageElement) {
     this.s = loadSettings();
     const q = new URLSearchParams(location.search);
     this.speed = Number(q.get("speed")) > 0 ? Number(q.get("speed")) : this.s.demoSpeed;
     const w = location.pathname.match(/^\/watch\/(of-[a-z0-9]{8,24})\/?$/);
     const v = new URLSearchParams(location.hash.slice(1)).get("v");
     if (w && v) this.watch = { id: w[1], token: v };
+    this.pageWatch = this.watch;
     const target = q.get("target");
     if (target) this.applyTarget(target);
   }
@@ -102,6 +117,16 @@ export class App {
     for (const el of document.querySelectorAll<HTMLElement>(".mark")) el.innerHTML = wordmarkSVG();
     for (const r of ROLES) this.portraits[r] = portraitURL(this.atlas, r);
     this.office = new Office($("#office"), this.bg, this.atlas, { speed: this.speed, onSelect: (r) => this.selectAgent(r) });
+    if ($("#library")) this.library = new LibraryPanel($("#library"));
+    if (this.props) {
+      const q = new URLSearchParams(location.search);
+      const pin = q.get("clock")?.match(/^(\d{1,2}):(\d{2})$/);
+      this.ambience = new Ambience(this.office, this.props, $("#office"), {
+        activity: activityConfigFrom(location.search),
+        clock: pin ? () => { const d = new Date(); d.setHours(Number(pin[1]), Number(pin[2]), d.getSeconds()); return d; } : undefined,
+        onOpenLibrary: (skill) => this.library?.open(skill),
+      });
+    }
     const task = $<HTMLTextAreaElement>("#task");
     task.value = this.defaultTask();
     $("#run-title").textContent = runTitle(task.value);
@@ -132,12 +157,91 @@ export class App {
       toast: (m) => this.toast(m),
       openOverlay: (id) => this.open(id),
       closeOverlay: (id) => this.close(id),
+      onOffice: (kind, st, e, effects, live) => this.onOffice(kind, st, e, effects, live),
     });
-    document.addEventListener("overtime:surface", (e) => { this.applyTarget(String((e as CustomEvent).detail)); this.enterSurface(); });
+    document.addEventListener("overtime:surface", (e) => { this.building?.close(); this.watch = this.pageWatch; this.applyTarget(String((e as CustomEvent).detail)); this.enterSurface(); });
+    if (this.props) this.mountBuilding();
     this.renderSteps(Object.fromEntries(STEPS.map((s) => [s.id, { state: "pending" }])) as Record<StepId, { state: StepState; pct?: number }>);
     this.renderLog([]);
     this.renderCost(0, 0, null);
     this.enterSurface();
+    if (this.building && this.buildingLink) void this.building.open(this.buildingLink.token ? this.buildingLink : null);
+  }
+
+  /** the office this browser owns (the one "Connect Hermes" created) */
+  private ownOffice(): OfficeCredsLike | null {
+    const c = store.getJSON<OfficeCredsLike | null>("overtime:hermes-office:v1", null);
+    return c && c.origin === location.origin ? c : null;
+  }
+
+  private mountBuilding() {
+    this.building = new BuildingController({
+      officeEl: $("#office"),
+      panelAnchor: $("#task-form"),
+      props: this.props!,
+      ownOffice: () => this.ownOffice(),
+      enterOffice: (floor, creds) => {
+        if (creds) {
+          this.watch = null;
+          this.s.surface = "hermes";
+          this.hermes.creds = creds;
+        } else this.watch = { id: floor.office, token: floor.viewToken };
+        this.enterSurface();
+      },
+      leave: () => {
+        this.watch = this.pageWatch;
+        this.hermes.creds = this.ownOffice();
+        if (this.buildingLink) history.replaceState(null, "", "/");
+        this.buildingLink = null;
+        this.enterSurface();
+      },
+      toast: (m) => this.toast(m),
+    });
+    // "Building" in the panel nav and the phone bar
+    const go = () => {
+      const b = this.building!;
+      if (b.inBuilding) void b.open();
+      else if (this.ownOffice()) void b.create();
+      else this.toast("Connect a Hermes first: it becomes floor 1 of your building.");
+    };
+    for (const host of [document.querySelector(".panel-nav"), document.querySelector(".bar-actions")]) {
+      if (!host) continue;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = host.classList.contains("bar-actions") ? "icon-btn" : "link-btn";
+      btn.dataset.building = "1";
+      btn.textContent = "Building";
+      btn.addEventListener("click", go);
+      host.prepend(btn);
+    }
+  }
+
+  /** Hermes events → office reactions (every session, not just the one on screen). */
+  private onOffice(kind: "reset" | "event", st: OfficeState, e?: { ts: number }, effects?: { k: string; [x: string]: unknown }[], live = true) {
+    const amb = this.ambience;
+    const holding = Object.values(st.sessions).some((x) => x.pending);
+    this.library?.render(st.library, this.onHermes);
+    if (!amb) return;
+    amb.setLibrary(st.library);
+    amb.setScoreboard(st.board);
+    if (kind === "reset") {
+      const last = st.order.reduce((m, id) => Math.max(m, st.sessions[id]?.lastAt ?? 0), 0);
+      amb.reset(last || null, holding);
+      return;
+    }
+    if (live && e) amb.event(e.ts, holding);
+    for (const f of effects ?? []) {
+      if (f.k === "skill") amb.book(String(f.name), String(f.change), Number(f.versions), live);
+      else if (f.k === "memory") amb.cabinet(f.op as "write" | "recall", live);
+      else if (f.k === "outcome") amb.outcome(!!f.ok, live);
+    }
+  }
+
+  /** the built-in team's runs today, for the scoreboard on the team surface */
+  private teamScore() {
+    const today = localDay(Date.now());
+    const list = store.getJSON<HistoryItem[]>(HISTORY_KEY, []).filter((h) => localDay(h.at) === today);
+    this.ambience?.setTeamScore(list.filter((h) => h.status === "done").length, list.filter((h) => h.status === "failed" || h.status === "budget").length);
   }
 
   /** (Re)enters the current surface: Hermes office, Hermes demo, read-only viewer, or the team. */
@@ -145,6 +249,11 @@ export class App {
     if (this.orch && ["running", "waiting", "paused"].includes(this.orch.status)) this.orch.cancel();
     $("#app").classList.toggle("is-hermes", this.onHermes);
     $("#app").classList.toggle("is-watch", !!this.watch);
+    if (this.ambience) {
+      this.ambience.auto = this.onHermes;
+      if (!this.onHermes) { this.ambience.setScoreboard(null); this.ambience.setLibrary({ skills: {}, order: [], memory: { writes: 0, recalls: 0, lastWriteAt: 0, lastRecallAt: 0 }, recent: {} }); this.teamScore(); this.ambience.reset(null); }
+    }
+    this.library?.render(null, this.onHermes);
     if (this.onHermes) {
       this.orch = null;
       $("#result").hidden = true;
@@ -286,6 +395,8 @@ export class App {
     this.renderChrome();
     await orch.run();
     this.saveHistory(orch);
+    this.teamScore();
+    if (orch.status === "done" || orch.status === "failed") this.ambience?.outcome(orch.status === "done", true);
     this.renderChrome();
   }
 
@@ -327,6 +438,7 @@ export class App {
 
   private renderChrome() {
     const hx = this.onHermes;
+    for (const b of document.querySelectorAll<HTMLElement>("[data-building]")) b.hidden = !hx || (!!this.watch && !this.building?.inBuilding);
     $("#hermes-box").hidden = !hx;
     for (const el of [$("#task"), $("#task-form > .task-row")]) el.hidden = hx;
     $("#task-target").hidden = !!this.watch;

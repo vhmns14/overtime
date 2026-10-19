@@ -20,6 +20,9 @@ const DESCRIBE: Record<string, string> = {
   "human_input.resolved": "The wait for a person ended.",
   message: "A user or assistant message (only sent at the 'full' privacy level).",
   error: "Something went wrong (provider error, crash).",
+  "skill.update": "A skill changed (created, patched, edited, loaded, viewed, installed, archived, restored, deleted). Name only. The office bookshelf gains a book per skill; improvements add versions.",
+  "memory.write": "The agent wrote to its memory (add, replace, remove). Never the content. The filing cabinet glows.",
+  "memory.recall": "The agent recalled memory or past sessions. The filing cabinet glows.",
 };
 
 const fieldSchema = (f: (typeof DATA_SPEC)[keyof typeof DATA_SPEC][string]) => {

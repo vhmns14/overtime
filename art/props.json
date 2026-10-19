@@ -1,0 +1,47 @@
+{
+  "note": "Where the generated office props sit, in office.png pixels. Read by scripts/build-props.py (for its preview) and src/office/props.ts (for drawing).",
+  "bookcase": {
+    "x": 1011,
+    "y": 349,
+    "w": 110,
+    "h": 203
+  },
+  "cabinet": {
+    "x": 1006,
+    "y": 534,
+    "h": 114,
+    "flip": true
+  },
+  "scoreboard": {
+    "x": 448,
+    "y": 169,
+    "w": 86,
+    "h": 82,
+    "shear": -0.512
+  },
+  "spineHeight": 22,
+  "buildingScale": 0.5,
+  "plantOccluder": {
+    "x": 1090,
+    "y": 446,
+    "w": 80,
+    "h": 130,
+    "pot": [
+      1107,
+      530,
+      1160,
+      576
+    ]
+  },
+  "shelves": {
+    "slope": 0.46,
+    "x0": 1024,
+    "x1": 1081,
+    "baselines": [
+      410,
+      455,
+      500
+    ]
+  },
+  "spineWiden": 1.9
+}

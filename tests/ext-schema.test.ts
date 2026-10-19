@@ -8,7 +8,7 @@ describe("event schema v1", () => {
     const minimal: Record<string, Record<string, unknown>> = {
       "tool.start": { name: "web_search" }, "tool.end": { name: "web_search", ok: true }, "file.write": { path: "a.py" },
       "plan.update": { items: [{ text: "x" }] }, "subagent.start": { id: "s1" }, "subagent.stop": { id: "s1" },
-      message: { role: "user", text: "hi" }, error: { message: "boom" },
+      message: { role: "user", text: "hi" }, error: { message: "boom" }, "skill.update": { name: "deploy-checklist", action: "created" },
     };
     for (const t of EVENT_TYPES) {
       const r = validateEvent({ type: t, data: minimal[t] ?? {} });

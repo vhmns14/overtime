@@ -6,6 +6,8 @@ import { ROLES, ROLE_INFO, STEPS, type AgentState, type LogEntry, type Role, typ
 import type { EventData, ExtEvent } from "./schema";
 import { DEFAULT_RULES, roleFor, type RoleRule } from "./roles";
 import { costOf, type Price } from "./pricing";
+import { applyLibrary, newLibrary, type LibraryState } from "./library";
+import { applyOutcome, newScoreboard, type Scoreboard } from "./scoreboard";
 
 export type Effect =
   | { k: "work"; role: Role; on: boolean; say?: string }
@@ -18,7 +20,11 @@ export type Effect =
   | { k: "clear-wait" }
   | { k: "tag"; role: Role; text: string | null }
   | { k: "idle-all" }
-  | { k: "session"; id: string };
+  | { k: "session"; id: string }
+  // office reactions (office-wide, whichever session is on screen)
+  | { k: "skill"; name: string; change: "added" | "improved" | "used" | "removed" | "restored"; versions: number }
+  | { k: "memory"; op: "write" | "recall" }
+  | { k: "outcome"; ok: boolean };
 
 export interface SubagentView { id: string; name: string; desk: Role; status: "running" | "done" | "failed"; startedAt: number; goal?: string }
 export interface PendingInput { kind: "approval" | "clarify" | "sudo" | "input"; text: string; detail?: string; at: number; role: Role }
@@ -54,6 +60,10 @@ export interface OfficeState {
   lastSeq: number;
   rules: RoleRule[];
   fallbackPrice: Price | null;
+  /** Hermes' skills (books on the shelf) and memory activity, across all sessions */
+  library: LibraryState;
+  /** today's sessions: succeeded vs failed */
+  board: Scoreboard;
 }
 
 const STEP_OF: Record<Role, StepId> = { pm: "plan", research: "research", coder: "code", reviewer: "review", ops: "deploy" };
@@ -61,7 +71,7 @@ const LOG_MAX = 300;
 const HANDOFF_GAP_MS = 12_000;
 
 export function newOffice(rules: RoleRule[] = DEFAULT_RULES, fallbackPrice: Price | null = null): OfficeState {
-  return { sessions: {}, order: [], children: {}, lastSeq: 0, rules, fallbackPrice };
+  return { sessions: {}, order: [], children: {}, lastSeq: 0, rules, fallbackPrice, library: newLibrary(), board: newScoreboard() };
 }
 
 function blankAgents(): SessionView["agents"] {
@@ -199,6 +209,8 @@ export function applyEvent(st: OfficeState, raw: ExtEvent): { session: string; e
       log(s, e, "system", x.final ? "Session closed" : x.status === "interrupted" ? "Turn interrupted" : x.status === "failed" ? "Turn failed" : "Turn finished, waiting for the next message", x.status === "failed" ? "error" : "info");
       fx.push({ k: "clear-wait" }, { k: "idle-all" });
       if (x.status === "completed" && !x.final) fx.push({ k: "say", role: "pm", text: "Done. Waiting for the next message.", kind: "talk" });
+      applyOutcome(st.board, e);
+      if (!x.final && x.status !== "interrupted") fx.push({ k: "outcome", ok: x.status !== "failed" });
       break;
     }
     case "agent.thinking": {
@@ -365,6 +377,25 @@ export function applyEvent(st: OfficeState, raw: ExtEvent): { session: string; e
         touch("pm");
         log(s, e, "pm", short(x.text, 200));
         fx.push({ k: "say", role: "pm", text: short(x.text, 60), kind: "talk" });
+      }
+      break;
+    }
+    case "skill.update": {
+      const x = d as EventData["skill.update"];
+      const lf = applyLibrary(st.library, e);
+      if (lf?.k === "book") {
+        fx.push({ k: "skill", name: lf.name, change: lf.change, versions: lf.versions });
+        if (lf.change !== "used") log(s, e, "pm", `skill “${short(x.name, 60)}” ${lf.change === "added" ? (lf.versions > 1 ? `on the shelf · v${lf.versions}` : "created: a new book on the shelf") : lf.change === "improved" ? `improved · v${lf.versions}` : lf.change}`);
+      }
+      break;
+    }
+    case "memory.write":
+    case "memory.recall": {
+      const lf = applyLibrary(st.library, e);
+      if (lf?.k === "cabinet") {
+        fx.push({ k: "memory", op: lf.op });
+        const t = (d as EventData["memory.write"]).target;
+        log(s, e, "pm", lf.op === "write" ? `memory ${(d as EventData["memory.write"]).action ?? "write"}${t === "user" ? " · user profile" : ""}` : "recalled past sessions");
       }
       break;
     }

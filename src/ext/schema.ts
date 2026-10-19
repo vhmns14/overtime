@@ -24,6 +24,10 @@ export const EVENT_TYPES = [
   "human_input.resolved",
   "message",
   "error",
+  // office: Hermes' skills and memory (names and counts only, never contents)
+  "skill.update",
+  "memory.write",
+  "memory.recall",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -47,6 +51,12 @@ export interface EventData {
   "human_input.resolved": { id?: string; outcome?: string };
   message: { role: "user" | "assistant"; text: string };
   error: { message: string; kind?: string; retryable?: boolean };
+  /** a skill was created, improved (patched/edited), loaded, viewed, installed, archived, restored or deleted */
+  "skill.update": { name: string; action: string; source?: string; use_count?: number; provenance?: string };
+  /** the agent wrote to its memory (add/replace/remove); target is "memory" or "user". Never the content */
+  "memory.write": { action?: string; target?: string; source?: string };
+  /** the agent recalled memory (e.g. Hermes' session_search) */
+  "memory.recall": { source?: string; count?: number };
 }
 
 /** An event as sent by an agent (or produced by an adapter such as the Hermes mapper). */
@@ -109,6 +119,9 @@ export const DATA_SPEC: Record<EventType, Record<string, FieldSpec>> = {
   "human_input.resolved": { id: S(false, LIMITS.idLen), outcome: S(false, 32) },
   message: { role: E(["user", "assistant"], true), text: S(true, LIMITS.text) },
   error: { message: S(true, 600), kind: S(false, 64), retryable: B() },
+  "skill.update": { name: S(true, 128), action: S(true, 32), source: S(false, 32), use_count: N(), provenance: S(false, 32) },
+  "memory.write": { action: S(false, 32), target: S(false, 32), source: S(false, 32) },
+  "memory.recall": { source: S(false, 64), count: N() },
 };
 
 export type ValidationResult = { ok: true; event: Omit<ExtEvent, "seq"> } | { ok: false; error: string };

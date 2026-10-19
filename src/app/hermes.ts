@@ -35,6 +35,8 @@ export interface HermesHost {
   toast(msg: string): void;
   openOverlay(id: "hermes"): void;
   closeOverlay(id: "hermes"): void;
+  /** office reactions (lights, sleep, scoreboard, bookshelf): every event of every session, plus a reset after a replay */
+  onOffice?(kind: "reset" | "event", st: OfficeState, e?: ExtEvent, effects?: Effect[], live?: boolean): void;
 }
 
 type Mode = "connect" | "waiting" | "live" | "demo" | "watch";
@@ -87,6 +89,7 @@ export class HermesController {
     this.host.office.reset();
     this.st = newOffice(this.rules);
     this.shown = null;
+    this.host.onOffice?.("reset", this.st);
     if (kind === "watch" && watch) {
       this.watch = watch;
       this.mode = "watch";
@@ -172,6 +175,7 @@ export class HermesController {
       this.live = false;
       for (const e of events) this.ingest(e);
       this.live = true;
+      this.host.onOffice?.("reset", this.st);
       if (events.length && this.mode === "waiting") this.mode = "live";
       this.syncScene();
       this.openStream(id, token);
@@ -248,6 +252,7 @@ export class HermesController {
   ingest(e: ExtEvent) {
     if (e.seq && e.seq <= this.st.lastSeq) return;
     const { session, effects } = applyEvent(this.st, e);
+    this.host.onOffice?.("event", this.st, e, effects, this.live);
     if (this.mode === "waiting" && this.live) { this.mode = "live"; this.host.closeOverlay("hermes"); }
     const newSession = effects.some((f) => f.k === "session");
     if (!this.shown || !this.st.sessions[this.shown] || (this.follow && newSession && session !== this.shown)) {
@@ -321,6 +326,7 @@ export class HermesController {
     this.st = newOffice(this.rules);
     this.shown = null;
     this.live = true;
+    this.host.onOffice?.("reset", this.st);
     this.demoRunning = true;
     const script = hermesDemoScript();
     let i = 0;

@@ -11,11 +11,15 @@ export interface Env {
   PREVIEW_TTL_DAYS?: string;
   EXT_OFFICES: DurableObjectNamespace;
   EXT_TTL_DAYS?: string;
+  /** buildings: one per group of Hermes installs, indexing their offices as floors (worker/src/building.ts) */
+  EXT_BUILDINGS: DurableObjectNamespace;
 }
 
 import { DurableObject } from "cloudflare:workers";
 import { handleExt } from "./ext";
 export { ExtOffice } from "./ext";
+import { handleBuilding } from "./building";
+export { ExtBuilding } from "./building";
 import { RUN_ID, MAX_FILES, MAX_TOTAL, PREVIEW_CSP, TYPES, safePath, isPrivateHost, json, CORS, htmlToText, ghRouteAllowed, ghBodyAllowed } from "./lib";
 
 async function proxyLLM(req: Request, env: Env): Promise<Response> {
@@ -114,6 +118,7 @@ export default {
     if (req.method === "OPTIONS" && path.startsWith("/api/") && !path.startsWith("/api/ext/")) return new Response(null, { status: 204, headers: CORS });
     try {
       if (path === "/api/health") return json({ ok: true, service: "overtime", previews: true, ext: true });
+      if (path.startsWith("/api/ext/buildings")) return (await handleBuilding(req, env, url))!;
       if (path.startsWith("/api/ext/")) return (await handleExt(req, env, url))!;
       if (path === "/api/llm" && req.method === "POST") return await proxyLLM(req, env);
       if (path.startsWith("/api/gh/")) return await proxyGitHub(req, url);

@@ -39,6 +39,7 @@ export const HERMES_OBSERVER_HOOKS = [
   "post_tool_call", "post_llm_call",
   "subagent_start", "subagent_stop",
   "pre_approval_request", "post_approval_response", "on_human_input_request", "on_human_input_resolved",
+  "on_skill_lifecycle",
 ] as const;
 export const HERMES_WEBHOOK_EVENTS = ["pre_tool_call", ...HERMES_OBSERVER_HOOKS.filter((h) => h !== "on_interim_message")] as const;
 
@@ -263,6 +264,15 @@ export function mapHermes(env: HermesEnvelope, privacy: Privacy = "metadata"): E
       }));
       if (ok) for (const w of view.writes) out.push(ev("file.write", env, { path: w.path, op: w.op }));
       if (ok && view.plan) out.push(ev("plan.update", env, { items: view.plan }));
+      if (ok) out.push(...skillMemoryEvents(toolName, args, env));
+      break;
+    }
+    case "on_skill_lifecycle": {
+      // newer Hermes: an authoritative skill-usage change (created, patched, edited, loaded, installed, archived, …)
+      const name = str(x.skill_name);
+      const action = str(x.action);
+      if (!name || !action) break;
+      out.push(ev("skill.update", env, { name: clip(name, 128), action: clip(action, 32), source: "lifecycle", use_count: num(x.use_count), provenance: str(x.provenance)?.slice(0, 32) }));
       break;
     }
     case "post_llm_call":
@@ -323,6 +333,30 @@ export function mapHermes(env: HermesEnvelope, privacy: Privacy = "metadata"): E
   // per-delivery idempotency key: Hermes retries a failed delivery once with the same delivery_id
   if (env.delivery_id) out.forEach((e, i) => (e.id = safeId(`${env.delivery_id}:${i}`)));
   return out;
+}
+
+const SKILL_ACTIONS: Record<string, string> = { create: "created", edit: "edited", patch: "patched", delete: "deleted", write_file: "edited", remove_file: "edited" };
+
+/**
+ * Skills and memory from tool calls (Hermes 0.19 has no on_skill_lifecycle yet): skill_manage
+ * create/patch/edit/delete, skill_view, the memory tool (add/replace/remove) and session_search.
+ * Names and actions only: never a skill's body or what was remembered.
+ */
+export function skillMemoryEvents(tool: string, args: Record<string, unknown> | null, env: HermesEnvelope): ExtEventIn[] {
+  const a = args ?? {};
+  const name = str(a.name) ?? str(a.skill) ?? str(a.skill_name);
+  if (tool === "skill_manage") {
+    const action = SKILL_ACTIONS[str(a.action) ?? ""];
+    return name && action ? [ev("skill.update", env, { name: clip(name, 128), action, source: "tool" })] : [];
+  }
+  if (tool === "skill_view") return name ? [ev("skill.update", env, { name: clip(name, 128), action: "viewed", source: "tool" })] : [];
+  if (tool === "memory") {
+    const action = str(a.action);
+    if (action && !["add", "replace", "remove"].includes(action)) return [];
+    return [ev("memory.write", env, { action: action ?? "add", target: str(a.target) === "user" ? "user" : "memory", source: "memory" })];
+  }
+  if (tool === "session_search") return [ev("memory.recall", env, { source: "session_search" })];
+  return [];
 }
 
 /** A short name tag for a subagent: a few words of its goal (args+), else its role. */

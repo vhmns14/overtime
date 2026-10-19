@@ -101,6 +101,11 @@ export function hermesDemoScript(): Step[] {
   s.push(...tool("call_15", "terminal", { command: "curl -fsS http://127.0.0.1:8000/health" }, 300, '{"status":"ok","db":"ok"}'));
   s.push(...apiCall(700, 120, 10300, 1.6, [{ id: "call_16", name: "todo", args: plan(["completed", "completed", "completed", "completed", "completed"]) }]));
   s.push(...tool("call_16", "todo", plan(["completed", "completed", "completed", "completed", "completed"]), 10, '{"todos": 5}'));
+  // Hermes' learning loop: it remembers how this service is run and saves the workflow as a skill
+  // (names only reach Overtime: the bookshelf gains a book, the filing cabinet glows)
+  s.push(...apiCall(760, 260, 10400, 2.2, [{ id: "call_17", name: "memory", args: { action: "add", target: "memory", content: "kedai-api runs under systemd; restart needs sudo approval" } }, { id: "call_18", name: "skill_manage", args: { action: "create", name: "fastapi-health-endpoint", category: "devops", content: "…" } }]));
+  s.push(...tool("call_17", "memory", { action: "add", target: "memory", content: "…" }, 30, '{"success": true}'));
+  s.push(...tool("call_18", "skill_manage", { action: "create", name: "fastapi-health-endpoint", category: "devops", content: "…" }, 60, '{"success": true}'));
   s.push(...apiCall(820, 310, 10500, 3.1, []));
   s.push([300, { hook_event_name: "post_llm_call", tool_name: null, tool_input: null, session_id: SID, extra: { task_id: "task_main", turn_id: T, user_message: HERMES_DEMO_TASK, assistant_response: "Done. GET /health now returns {status, db} after a SELECT 1. Added tests/test_health.py (6 tests pass, ruff clean), pushed feat/health and restarted kedai-api; curl confirms it is up.", model: MODEL, platform: "cli" } }]);
   s.push([400, { hook_event_name: "on_session_end", tool_name: null, tool_input: null, session_id: SID, extra: { task_id: "task_main", turn_id: T, completed: true, failed: false, interrupted: false, turn_exit_reason: "final_response", model: MODEL, platform: "cli" } }]);

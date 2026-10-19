@@ -24,9 +24,18 @@ class_name = "ExtOffice"
 tag = "v1"
 new_sqlite_classes = ["PreviewStore"]
 
+[[durable_objects.bindings]]
+name = "EXT_BUILDINGS"
+class_name = "ExtBuilding"
+
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["ExtOffice"]
+
+# buildings: several Hermes installs (offices) as floors of one building
+[[migrations]]
+tag = "office-buildings-v1"
+new_sqlite_classes = ["ExtBuilding"]
 
 [vars]
 PREVIEW_TTL_DAYS = "7"

@@ -39,6 +39,7 @@ OBSERVER_HOOKS = (
     "post_tool_call", "post_llm_call",
     "subagent_start", "subagent_stop",
     "pre_approval_request", "post_approval_response", "on_human_input_request", "on_human_input_resolved",
+    "on_skill_lifecycle",  # newer Hermes; 0.19 reports skills through skill_manage tool calls instead
 )
 PRIVACY_LEVELS = ("metadata", "args", "full")
 
@@ -51,6 +52,8 @@ _META_EXTRA = {
     "provider", "platform", "finish_reason", "assistant_tool_call_count", "completed", "interrupted",
     "failed", "turn_exit_reason", "reason", "retryable", "status_code", "max_retries", "description",
     "is_first_turn", "iteration", "already_streamed", "message_count", "tool_count",
+    # on_skill_lifecycle: the skill's name, never its body
+    "skill_name", "action", "provenance", "use_count", "reused", "reuse_after_patch",
 }
 _ARGS_EXTRA = {"child_goal", "child_summary", "command", "prompt", "error_message"}
 _FULL_EXTRA = {"result", "user_message", "assistant_response", "text"}
@@ -141,6 +144,16 @@ def trim_args(tool: Optional[str], args: Any, privacy: str) -> Optional[Dict[str
             ]
         if tool == "delegate_task" and isinstance(args.get("tasks"), list):
             out["tasks"] = [{} for _ in args["tasks"][:20]]
+        if tool in ("skill_manage", "skill_view"):
+            # skill names and what happened to them (the bookshelf); never the skill's content
+            for k in ("name", "action"):
+                if isinstance(args.get(k), str):
+                    out[k] = _clip(args[k], 128)
+        if tool == "memory":
+            # memory add/replace/remove and its target (memory|user); never what was remembered
+            for k in ("action", "target"):
+                if isinstance(args.get(k), str):
+                    out[k] = args[k][:16]
         return out
     for k, v in list(args.items())[:30]:
         if k == "todos" and isinstance(v, list):

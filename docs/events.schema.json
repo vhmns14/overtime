@@ -31,7 +31,10 @@
         "human_input.request",
         "human_input.resolved",
         "message",
-        "error"
+        "error",
+        "skill.update",
+        "memory.write",
+        "memory.recall"
       ]
     },
     "ts": {
@@ -683,6 +686,107 @@
             "required": [
               "message"
             ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "skill.update"
+          }
+        }
+      },
+      "then": {
+        "description": "A skill changed (created, patched, edited, loaded, viewed, installed, archived, restored, deleted). Name only. The office bookshelf gains a book per skill; improvements add versions.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "action": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "source": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "use_count": {
+                "type": "number",
+                "minimum": 0
+              },
+              "provenance": {
+                "type": "string",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "name",
+              "action"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "memory.write"
+          }
+        }
+      },
+      "then": {
+        "description": "The agent wrote to its memory (add, replace, remove). Never the content. The filing cabinet glows.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "target": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "source": {
+                "type": "string",
+                "maxLength": 32
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "memory.recall"
+          }
+        }
+      },
+      "then": {
+        "description": "The agent recalled memory or past sessions. The filing cabinet glows.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "count": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
           }
         }
       }
