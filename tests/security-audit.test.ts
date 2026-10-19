@@ -224,3 +224,27 @@ describe("security headers", () => {
     for (const x of ["X-Content-Type-Options: nosniff", "Referrer-Policy: no-referrer", "Cross-Origin-Opener-Policy: same-origin", "X-Frame-Options: DENY"]) expect(h).toContain(x);
   });
 });
+
+describe("markdown export", () => {
+  it("event content cannot break out of code spans, table cells or lines", async () => {
+    const { sessionStats } = await import("../src/insights/aggregate");
+    const { summaryMarkdown } = await import("../src/insights/summary");
+    const evil = "x` | [click](javascript:alert(1)) <img src=x onerror=alert(1)>\n# pwned";
+    const evs = [
+      { type: "session.start", session: "s", data: { title: evil, model: "m`<b>" } },
+      { type: "tool.start", session: "s", data: { name: evil.slice(0, 120) } },
+      { type: "tool.end", session: "s", data: { name: evil.slice(0, 120), ok: false, error: evil } },
+      { type: "file.write", session: "s", data: { path: evil.slice(0, 300) } },
+      { type: "error", session: "s", data: { message: evil } },
+    ].map((e, i) => ({ ...(validateEvent({ ...e, ts: 1_760_000_000_000 + i * 1000 }) as { event: any }).event, seq: i + 1 }));
+    const md = summaryMarkdown(sessionStats(evs, "s"));
+    expect(md).not.toMatch(/^# pwned/m);
+    const outside = md.replace(/`[^`\n]*`/g, ""); // inside a code span nothing renders
+    expect(outside).not.toMatch(/(?<!\\)<img/);
+    expect(outside).not.toMatch(/(?<!\\)\[click\]\(javascript/);
+    // every table row still has exactly the 4 cells of the header
+    for (const row of md.split("\n").filter((l) => l.startsWith("| ") && !l.startsWith("| Tool"))) expect(row.replace(/\\\|/g, "").split("|").length).toBe(6);
+    // a code span never contains a backtick that closes it early
+    for (const l of md.split("\n").filter((x) => x.includes("`"))) expect((l.match(/(?<!\\)`/g) ?? []).length % 2).toBe(0);
+  });
+});

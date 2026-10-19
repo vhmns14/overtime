@@ -45,7 +45,9 @@ export function headline(s: SessionStats): string {
   return `${STATUS_LABEL[s.status]} · ${fmtDuration(s.durationMs)} · ${fmtUsd(s.usd)} · ${fmtTokens(s.tokens.total)} tokens`;
 }
 
-const mdEsc = (s: string) => s.replace(/([\\`*_[\]|<>])/g, "\\$1");
+// event content is untrusted: never let it end a code span, a table cell, a line or start HTML
+const mdEsc = (s: string) => s.replace(/[\r\n]+/g, " ").replace(/([\\`*_[\]|<>#!])/g, "\\$1");
+const mdCode = (s: string, cell = false) => "`" + s.replace(/[\r\n]+/g, " ").replace(/`/g, "'").replace(/\|/g, cell ? "\\|" : "|") + "`";
 
 export function summaryMarkdown(s: SessionStats, opts: { aiSummary?: string; when?: string } = {}): string {
   const L: string[] = [];
@@ -53,17 +55,17 @@ export function summaryMarkdown(s: SessionStats, opts: { aiSummary?: string; whe
   L.push(`**${STATUS_LABEL[s.status]}** · ${fmtDuration(s.durationMs)} · ${fmtUsd(s.usd)}${s.unpriced.length ? " (+ unpriced calls)" : ""} · ${fmtTokens(s.tokens.total)} tokens · ${plural(s.calls, "model call")}${opts.when ? ` · ${opts.when}` : ""}`, "");
   if (opts.aiSummary) L.push(`> ${mdEsc(opts.aiSummary).replace(/\n+/g, "\n> ")}`, "");
   L.push("### What was done", ...whatWasDone(s).map((x) => `- ${mdEsc(x)}`), "");
-  if (s.files.length) L.push("### Files changed", ...s.files.slice(0, 30).map((f) => `- \`${f.path.replace(/`/g, "'")}\` · ${f.op}${f.count > 1 ? ` ×${f.count}` : ""}`), "");
+  if (s.files.length) L.push("### Files changed", ...s.files.slice(0, 30).map((f) => `- ${mdCode(f.path)} · ${f.op}${f.count > 1 ? ` ×${f.count}` : ""}`), "");
   if (s.tools.length) {
     L.push("### Top tools", "| Tool | Calls | Failed | Time |", "|---|---:|---:|---:|");
-    for (const t of s.tools.slice(0, 8)) L.push(`| \`${t.name}\` | ${t.count} | ${t.fails} | ${fmtDuration(t.totalMs)} |`);
+    for (const t of s.tools.slice(0, 8)) L.push(`| ${mdCode(t.name, true)} | ${t.count} | ${t.fails} | ${fmtDuration(t.totalMs)} |`);
     L.push("");
   }
   if (s.errors.length) L.push("### Errors", ...s.errors.slice(0, 10).map((e) => `- ${mdEsc(e.text)}`), "");
   L.push("### Models and tokens");
-  L.push(`- Models: ${s.models.length ? s.models.map((m) => `\`${m}\``).join(", ") : "unknown"}`);
+  L.push(`- Models: ${s.models.length ? s.models.map((m) => mdCode(m)).join(", ") : "unknown"}`);
   L.push(`- Tokens: ${fmtTokens(s.tokens.input)} in · ${fmtTokens(s.tokens.output)} out · ${fmtTokens(s.tokens.cacheRead)} cache read${s.tokens.cacheWrite ? ` · ${fmtTokens(s.tokens.cacheWrite)} cache write` : ""}`);
-  if (s.unpriced.length) L.push(`- No price known for: ${s.unpriced.map((m) => `\`${m}\``).join(", ")}`);
+  if (s.unpriced.length) L.push(`- No price known for: ${s.unpriced.map((m) => mdCode(m)).join(", ")}`);
   L.push("", "_Made with Overtime_");
   return L.join("\n");
 }
