@@ -18,7 +18,7 @@ const PRUNE = 5_000;
 const MAX_WS = 50;
 const PRIVACY = new Set(["metadata", "args", "full"]);
 
-interface OfficeConfig {
+export interface OfficeConfig {
   id: string;
   agent: "hermes" | "generic";
   name: string;
@@ -159,7 +159,7 @@ export async function handleExt(req: Request, env: ExtEnv, url: URL): Promise<Re
 }
 
 export class ExtOffice extends DurableObject<ExtEnv> {
-  private cfg: OfficeConfig | null = null;
+  protected cfg: OfficeConfig | null = null;
   private reqBucket = new TokenBucket(120, 20);
   private evBucket = new TokenBucket(2000, 200);
   private alarmAt = 0;
@@ -189,7 +189,7 @@ export class ExtOffice extends DurableObject<ExtEnv> {
     return true;
   }
 
-  private async who(token: string): Promise<Who> {
+  protected async who(token: string): Promise<Who> {
     if (!this.cfg || !token) return null;
     const h = await sha256Hex(token);
     if (safeEqual(h, this.cfg.ingestHash)) return "ingest";
@@ -255,9 +255,13 @@ export class ExtOffice extends DurableObject<ExtEnv> {
       if (n > MAX_EVENTS) sql.exec("DELETE FROM events WHERE seq IN (SELECT seq FROM events ORDER BY seq LIMIT ?)", PRUNE);
       this.broadcast(accepted);
       void this.touchAlarm();
+      this.onAccepted(accepted);
     }
     return { received, accepted: accepted.length, rejected: rejected.slice(0, 20), lastSeq: accepted.at(-1)?.seq };
   }
+
+  /** Extension point: called with every batch of newly stored events (remote control uses it for notifications). */
+  protected onAccepted(_events: ExtEvent[]): void { /* no-op */ }
 
   private trackSession(e: ExtEvent) {
     const sql = this.ctx.storage.sql;
@@ -276,7 +280,7 @@ export class ExtOffice extends DurableObject<ExtEnv> {
     );
   }
 
-  private broadcast(events: ExtEvent[]) {
+  protected broadcast(events: ExtEvent[]) {
     const msg = JSON.stringify({ type: "events", events });
     for (const ws of this.ctx.getWebSockets()) {
       try { ws.send(msg); } catch { /* closed */ }
@@ -338,7 +342,7 @@ export class ExtOffice extends DurableObject<ExtEnv> {
     try { ws.close(code === 1005 ? 1000 : code, "bye"); } catch { /* already closed */ }
   }
 
-  private async touchAlarm(force = false) {
+  protected async touchAlarm(force = false) {
     const now = Date.now();
     if (!force && now - this.alarmAt < 3_600_000) return;
     this.alarmAt = now;

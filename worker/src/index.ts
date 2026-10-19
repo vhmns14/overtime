@@ -12,10 +12,14 @@ export interface Env {
   EXT_OFFICES: DurableObjectNamespace;
   EXT_TTL_DAYS?: string;
 }
+// remote control (approvals, tasks, notifications): optional secrets, see worker/src/control.ts
+export interface Env extends Omit<ControlEnv, "EXT_OFFICES" | "EXT_TTL_DAYS"> {}
 
 import { DurableObject } from "cloudflare:workers";
 import { handleExt } from "./ext";
-export { ExtOffice } from "./ext";
+import { handleControl, type ControlEnv } from "./control";
+// the office Durable Object with remote control on top (same class name: no migration)
+export { ControlOffice as ExtOffice } from "./control";
 import { RUN_ID, MAX_FILES, MAX_TOTAL, PREVIEW_CSP, TYPES, safePath, isPrivateHost, json, CORS, htmlToText, ghRouteAllowed, ghBodyAllowed } from "./lib";
 
 async function proxyLLM(req: Request, env: Env): Promise<Response> {
@@ -114,7 +118,7 @@ export default {
     if (req.method === "OPTIONS" && path.startsWith("/api/") && !path.startsWith("/api/ext/")) return new Response(null, { status: 204, headers: CORS });
     try {
       if (path === "/api/health") return json({ ok: true, service: "overtime", previews: true, ext: true });
-      if (path.startsWith("/api/ext/")) return (await handleExt(req, env, url))!;
+      if (path.startsWith("/api/ext/")) return (await handleControl(req, env, url)) ?? (await handleExt(req, env, url))!;
       if (path === "/api/llm" && req.method === "POST") return await proxyLLM(req, env);
       if (path.startsWith("/api/gh/")) return await proxyGitHub(req, url);
       if (path === "/api/fetch" && req.method === "GET") return await fetchPage(url.searchParams.get("url") ?? "");

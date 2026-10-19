@@ -9,7 +9,7 @@ export function fakeCtx() {
   const sql = {
     exec<T = Record<string, unknown>>(query: string, ...params: unknown[]) {
       const st = db.prepare(query);
-      const isRead = /^\s*(select|insert[\s\S]*returning|with)/i.test(query);
+      const isRead = /^\s*(select|(?:insert|update|delete)[\s\S]*returning|with)/i.test(query);
       const rows = (isRead ? st.all(...(params as never[])) : (st.run(...(params as never[])), [])) as T[];
       return { toArray: () => rows, one: () => rows[0] };
     },

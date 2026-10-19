@@ -16,7 +16,7 @@ const VALUE_PATTERNS: RegExp[] = [
   /\bAIza[0-9A-Za-z_-]{30,}\b/g,
   /\bhf_[A-Za-z0-9]{20,}\b/g,
   /\bgsk_[A-Za-z0-9]{20,}\b/g,
-  /\bot_(?:ing|view|whs)_[A-Za-z0-9_-]{16,}\b/g,
+  /\bot_(?:ing|view|whs|ctl)_[A-Za-z0-9_-]{16,}\b/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // JWT
   /\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{16,}/gi,
   // key=value / "key": "value" / KEY: value assignments of secret-looking names
