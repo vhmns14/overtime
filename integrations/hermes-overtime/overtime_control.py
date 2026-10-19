@@ -47,21 +47,35 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 import uuid
+from collections import OrderedDict
 from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger("hermes_overtime.control")
 
 Http = Callable[[str, str, Optional[Dict[str, Any]], Dict[str, str], float], Tuple[int, Dict[str, Any]]]
-Resolver = Callable[[str, str, str], str]
+Resolver = Callable[..., str]  # (session_key, choice, command, pin) -> applied | stale | unsupported
+Pinner = Callable[[str, str], Any]
 TRUTHY = {"1", "true", "yes", "on"}
 REMOTE_CHOICES = ("once", "session", "deny")
 
 
 def _truthy(v: Optional[str]) -> bool:
     return (v or "").strip().lower() in TRUTHY
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects: urllib would replay the Authorization header (the ingest token or
+    API_SERVER_KEY) to whatever host a Location header names."""
+
+    def redirect_request(self, *a: Any, **k: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
 
 
 def urllib_http(method: str, url: str, body: Optional[Dict[str, Any]], headers: Dict[str, str], timeout: float) -> Tuple[int, Dict[str, Any]]:
@@ -71,7 +85,7 @@ def urllib_http(method: str, url: str, body: Optional[Dict[str, Any]], headers: 
         h["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=h, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _OPENER.open(req, timeout=timeout) as r:
             raw = r.read().decode("utf-8") or "{}"
             return int(r.status), json.loads(raw)
     except urllib.error.HTTPError as e:
@@ -98,6 +112,10 @@ class ControlConfig:
             self.max_chars = max(1, min(int(e.get("OVERTIME_TASK_MAX_CHARS", "4000") or 4000), 4000))
         except ValueError:
             self.max_chars = 4000
+        try:
+            self.task_max_age = max(60.0, float(e.get("OVERTIME_TASK_MAX_AGE", "3600") or 3600))
+        except ValueError:
+            self.task_max_age = 3600.0
         port = (e.get("API_SERVER_PORT") or "8642").strip()
         self.api_url = (e.get("OVERTIME_HERMES_API") or f"http://127.0.0.1:{port}").rstrip("/")
         self.api_key = (e.get("API_SERVER_KEY") or "").strip()
@@ -137,30 +155,70 @@ def verify_command(token: str, office: str, c: Dict[str, Any]) -> bool:
         return False
 
 
-def hermes_resolver(session_key: str, choice: str, command: str) -> str:
-    """Resolve the pending gateway approval for session_key, only if its head is this command.
-
-    Uses tools.approval.resolve_gateway_approval, the function behind Hermes' /approve, /deny and the
-    API server's POST /v1/runs/{id}/approval. Returns applied | stale | unsupported.
-    """
+def _approval_internals() -> Any:
     try:
         from tools import approval as ap  # type: ignore
     except Exception:
-        return "unsupported"
-    resolve = getattr(ap, "resolve_gateway_approval", None)
-    queues = getattr(ap, "_gateway_queues", None)
-    lock = getattr(ap, "_lock", None)
-    if resolve is None or queues is None or lock is None:
-        return "unsupported"  # a Hermes build we do not know: never guess which approval to answer
+        return None
+    if getattr(ap, "resolve_gateway_approval", None) is None or getattr(ap, "_gateway_queues", None) is None or getattr(ap, "_lock", None) is None:
+        return None  # a Hermes build we do not know: never guess which approval to answer
+    return ap
+
+
+def hermes_pin(session_key: str, command: str) -> Any:
+    """The exact queue entry of the approval that is being requested right now.
+
+    Hermes appends the entry to the session's queue and then fires ``pre_approval_request`` in the
+    same agent thread, so at hook time our entry is the newest one in the queue with this command.
+    Pinning it means a later answer can only ever resolve *this* request, whatever happens to the
+    rest of the queue in between (answered locally, timed out, a new approval queued).
+    """
+    ap = _approval_internals()
+    if ap is None:
+        return None
     try:
-        with lock:
-            q = queues.get(session_key) or []
-            head = q[0] if q else None
-            data = getattr(head, "data", None) if head is not None else None
-            same = isinstance(data, dict) and data.get("command") == command
-        if not same:
-            return "stale"
-        return "applied" if resolve(session_key, choice) > 0 else "stale"
+        with ap._lock:
+            q = list(ap._gateway_queues.get(session_key) or [])
+        for entry in reversed(q):
+            data = getattr(entry, "data", None)
+            if isinstance(data, dict) and data.get("command") == command and hasattr(entry, "event"):
+                return entry
+    except Exception:
+        logger.debug("hermes-overtime: could not pin the approval", exc_info=True)
+    return None
+
+
+def hermes_resolver(session_key: str, choice: str, command: str, pin: Any = None) -> str:
+    """Resolve one pending gateway approval, atomically, only if it is still waiting for this command.
+
+    With a pinned entry (see hermes_pin) exactly that entry is answered; without one only the head of
+    the session's queue, and only when its command is this command. The check and the removal happen
+    under Hermes' own lock in one step, then the entry is woken exactly like
+    tools.approval.resolve_gateway_approval (the function behind /approve, /deny and
+    POST /v1/runs/{id}/approval) does it. Checking first and calling resolve_gateway_approval after
+    would answer whatever had moved to the head in between. Returns applied | stale | unsupported.
+    """
+    ap = _approval_internals()
+    if ap is None:
+        return "unsupported"
+    try:
+        with ap._lock:
+            q = ap._gateway_queues.get(session_key) or []
+            target = None
+            if pin is not None:
+                if any(e is pin for e in q):
+                    target = pin
+            elif q:
+                target = q[0]
+            data = getattr(target, "data", None) if target is not None else None
+            if not (isinstance(data, dict) and data.get("command") == command and hasattr(target, "event") and hasattr(target, "result")):
+                return "stale"
+            q.remove(target)
+            if not q:
+                ap._gateway_queues.pop(session_key, None)
+        target.result = choice
+        target.event.set()
+        return "applied"
     except Exception:
         logger.debug("hermes-overtime: resolve failed", exc_info=True)
         return "unsupported"
@@ -179,12 +237,14 @@ class RemoteApprover:
 
     def __init__(self, cfg: ControlConfig, ingest_url: str, token: str, http: Optional[Http] = None,
                  resolver: Optional[Resolver] = None, timeout_fn: Callable[[], float] = hermes_approval_timeout,
+                 pinner: Optional[Pinner] = None,
                  sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> None:
         self.cfg = cfg
         self.base, self.office = control_base(ingest_url)
         self.token = token
         self.http = http or urllib_http
         self.resolver = resolver or hermes_resolver
+        self.pinner = pinner or (hermes_pin if resolver is None else (lambda _sk, _cmd: None))
         self.timeout_fn = timeout_fn
         self.sleep = sleep
         self.clock = clock
@@ -224,11 +284,15 @@ class RemoteApprover:
         wait = self.wait_seconds()
         if wait < 5:
             return None
+        try:
+            pin = self.pinner(session_key, command)
+        except Exception:
+            pin = None
         rid = "apr_" + uuid.uuid4().hex[:24]
         cancel = threading.Event()
         with self._lock:
             self._pending[(session_key, command)] = (rid, cancel)
-        t = threading.Thread(target=self._run, args=(rid, session_key, command, kwargs, session_id or session_key, wait, cancel), name="hermes-overtime-approval", daemon=True)
+        t = threading.Thread(target=self._run, args=(rid, session_key, command, kwargs, session_id or session_key, wait, cancel, pin), name="hermes-overtime-approval", daemon=True)
         t.start()
         return t
 
@@ -246,9 +310,9 @@ class RemoteApprover:
         except Exception:
             pass
 
-    def _run(self, rid: str, session_key: str, command: str, kwargs: Dict[str, Any], session: str, wait: float, cancel: threading.Event) -> None:
+    def _run(self, rid: str, session_key: str, command: str, kwargs: Dict[str, Any], session: str, wait: float, cancel: threading.Event, pin: Any = None) -> None:
         try:
-            self._run_inner(rid, session_key, command, kwargs, session, wait, cancel)
+            self._run_inner(rid, session_key, command, kwargs, session, wait, cancel, pin)
         except Exception:
             logger.debug("hermes-overtime: remote approval thread failed", exc_info=True)
         finally:
@@ -256,7 +320,7 @@ class RemoteApprover:
                 if self._pending.get((session_key, command), (None,))[0] == rid:
                     self._pending.pop((session_key, command), None)
 
-    def _run_inner(self, rid: str, session_key: str, command: str, kwargs: Dict[str, Any], session: str, wait: float, cancel: threading.Event) -> None:
+    def _run_inner(self, rid: str, session_key: str, command: str, kwargs: Dict[str, Any], session: str, wait: float, cancel: threading.Event, pin: Any = None) -> None:
         start = self.clock()
         body = {
             "request_id": rid, "session": session[:128], "surface": "gateway", "command": command,
@@ -316,10 +380,26 @@ class RemoteApprover:
         if cancel.is_set():
             self._outcome(rid, "answered_locally")
             return
-        result = self.resolver(session_key, str(decision["choice"]), command)
+        # the deadline again: an answer that arrives after Hermes' own timeout must never be applied
+        if self.clock() - start > wait:
+            self.stats["timeouts"] += 1
+            self._outcome(rid, "timeout", "the answer arrived after the wait ended; Hermes keeps asking locally")
+            return
+        result = self.resolver(session_key, str(decision["choice"]), command, pin)
         if result == "applied":
             self.stats["applied"] += 1
         self._outcome(rid, result, "" if result == "applied" else "the approval was no longer pending in Hermes")
+
+
+def looks_like_slash(prompt: str) -> bool:
+    """True when a prompt would read as a slash command: after Unicode compatibility folding (a
+    fullwidth "／" is "/"), and ignoring leading whitespace and invisible format characters
+    (zero-width spaces, BOM, bidi marks) that a UI or Hermes might strip."""
+    s = unicodedata.normalize("NFKC", prompt)
+    i = 0
+    while i < len(s) and (s[i].isspace() or unicodedata.category(s[i]) in ("Cf", "Cc", "Zs", "Zl", "Zp")):
+        i += 1
+    return s[i:i + 1] in ("/", "\u2215", "\u2044", "\u29f8")
 
 
 def in_gateway_process() -> bool:
@@ -343,7 +423,12 @@ class TaskBridge:
         self.track_max_s = track_max_s
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self.stats = {"claimed": 0, "started": 0, "rejected": 0, "failed": 0, "last_error": ""}
+        self.stats = {"claimed": 0, "started": 0, "rejected": 0, "failed": 0, "replayed": 0, "last_error": ""}
+        # ids of every command this process has acted on: a command is never run twice, whatever
+        # the server (or anyone replaying its answers) sends
+        self._seen: "OrderedDict[str, None]" = OrderedDict()
+        self._seen_lock = threading.Lock()
+        self.now_ms: Callable[[], float] = lambda: time.time() * 1000
 
     @property
     def ready(self) -> bool:
@@ -411,6 +496,21 @@ class TaskBridge:
         if not verify_command(self.token, self.office, cmd):
             self._reject(cid, "signature check failed")
             return
+        with self._seen_lock:
+            if cid in self._seen:
+                self.stats["replayed"] += 1
+                logger.warning("hermes-overtime: ignored a task that was already handled (%s)", cid)
+                return  # never ack: the first delivery owns the task's state
+            self._seen[cid] = None
+            while len(self._seen) > 1000:
+                self._seen.popitem(last=False)
+        try:
+            age_s = (self.now_ms() - float(cmd.get("created_at") or 0)) / 1000
+        except (TypeError, ValueError):
+            age_s = float("inf")
+        if age_s > self.cfg.task_max_age:
+            self._reject(cid, f"task is older than OVERTIME_TASK_MAX_AGE ({int(self.cfg.task_max_age)} s)")
+            return
         kind = str(cmd.get("kind"))
         payload = str(cmd.get("payload") or "")
         if kind not in self.cfg.commands:
@@ -420,7 +520,7 @@ class TaskBridge:
             if len(payload) > self.cfg.max_chars:
                 self._reject(cid, f"prompt longer than OVERTIME_TASK_MAX_CHARS ({self.cfg.max_chars})")
                 return
-            if payload.lstrip().startswith("/") and not self.cfg.allow_slash:
+            if looks_like_slash(payload) and not self.cfg.allow_slash:
                 self._reject(cid, "slash commands are refused (set OVERTIME_ALLOW_SLASH=1 to allow)")
                 return
             self._start_run(cid, payload)

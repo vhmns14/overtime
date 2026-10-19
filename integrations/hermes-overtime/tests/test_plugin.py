@@ -306,3 +306,38 @@ def test_skill_lifecycle_hook_is_observed_with_name_and_counts():
     assert env["extra"]["action"] == "patched"
     assert env["extra"]["use_count"] == 4
     assert env["session_id"] == "s1"
+
+
+# ---------------- audit regressions: what metadata may carry ----------------
+
+def test_metadata_urls_keep_the_host_only():
+    """Exploit: a Telegram bot token lives in the URL path (api.telegram.org/bot<token>/…)."""
+    url = "https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage?chat_id=1"
+    e = ho.build_envelope("post_tool_call", {"tool_name": "web_extract", "args": {"url": url}, "session_id": "s"}, "metadata")
+    assert e["tool_input"]["url"] == "api.telegram.org"
+    assert "AAHdq" not in json.dumps(e)
+
+
+@pytest.mark.parametrize("secret", [
+    "API_SERVER_KEY=abcdef0123456789", "HF_TOKEN=hf_abcdefghijklmnopqrstu", "TELEGRAM_BOT_TOKEN=123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
+    "sk_live_abcdefghijklmnop1234", "npm_abcdefghijklmnopqrstuvwxyz0123456789", "--password hunter2hunter2", "--token=abcdefghijkl",
+    "glpat-abcdefghijklmnopqrst", "https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXX", "postgres://app:s3cr3tpw@db/x",
+    "token abcdefghijklmnopqrstuvwx",
+])
+def test_args_level_redacts_more_secret_shapes(secret):
+    e = ho.build_envelope("post_tool_call", {"tool_name": "terminal", "args": {"command": f"run {secret} now"}, "session_id": "s"}, "args")
+    cmd = e["tool_input"]["command"]
+    assert "[redacted]" in cmd
+    for part in ("abcdef0123456789", "hf_abc", "AAHdq", "sk_live_", "npm_abc", "hunter2", "abcdefghijkl", "glpat-", "XXXXXXXX", "s3cr3tpw", "abcdefghijklmnopqrstuvwx"):
+        assert part not in cmd
+
+
+def test_unterminated_pem_does_not_swallow_the_rest_of_a_command():
+    out = ho.redact("echo ok # -----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234567890abcdef\n; rm -rf ~")
+    assert "rm -rf ~" in out and "MIIEow" not in out
+
+
+def test_plain_http_to_a_public_host_is_flagged():
+    assert ho.insecure_remote("http://203.0.113.5:8787/api/ext/runs/of-x/hermes")
+    for ok in ("https://x.example/api", "http://127.0.0.1:8787/a", "http://localhost:8787", "http://192.168.1.4:8787", "http://10.0.0.2", "http://[::1]:8787/"):
+        assert not ho.insecure_remote(ok)

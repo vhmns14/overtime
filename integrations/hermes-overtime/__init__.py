@@ -63,26 +63,46 @@ _ARGS_EXTRA = {"child_goal", "child_summary", "command", "prompt", "error_messag
 _FULL_EXTRA = {"result", "user_message", "assistant_response", "text"}
 _BULKY_ARGS = {"content", "old_string", "new_string", "patch", "code", "data", "body", "file_text"}
 
+# keep in sync with src/ext/redact.ts (the Worker redacts again before storage)
 _SECRET_RES = [
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)"),
+    # a PEM block; without an END marker only the base64 lines that follow, never the rest of the text
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:\s*[A-Za-z0-9+/=]{16,})*)"),
     re.compile(r"\bsk-(?:or-v1-|ant-(?:api\d+-)?|proj-|live-|test-)?[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b"),
     re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
     re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),
-    re.compile(r"\bot_(?:ing|view|whs|ctl|bld|bview)_[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bya29\.[0-9A-Za-z_-]{20,}"),
+    re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgsk_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bnpm_[A-Za-z0-9]{30,}\b"),
+    re.compile(r"\bpypi-[A-Za-z0-9_-]{40,}"),
+    re.compile(r"\bdop_v1_[a-f0-9]{40,}\b"),
+    re.compile(r"(?<!\d)\d{6,12}:[A-Za-z0-9_-]{30,}\b"),  # Telegram bot token (also inside /bot<token>/)
+    re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]+"),
+    re.compile(r"https://(?:discord|discordapp)\.com/api/webhooks/\d+/[A-Za-z0-9_-]+"),
+    re.compile(r"\bot_(?:ing|view|whs|ctl|bld|bview|pair)_[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
-    re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}"),
 ]
-_SECRET_ASSIGN = re.compile(r"(?i)\b([A-Za-z0-9_]*(?:PASSWORD|PASSWD|SECRET|API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|PRIVATE_?KEY)[A-Za-z0-9_]*)(\s*[=:]\s*[\"']?)([^\s\"'&,;]{4,})")
-_SECRET_KEY = re.compile(r"(?i)^(?:.*[_-])?(?:password|passwd|secret|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|authorization|cookie|private[_-]?key|credentials?|client[_-]?secret)$")
+_SECRET_KEEP = [
+    # keep the label, drop the value
+    re.compile(r"(?i)\b((?:Bearer|Basic|token)\s+)[A-Za-z0-9._~+/=-]{16,}"),
+    re.compile(r"(?i)(--(?:password|passwd|pass|token|api-key|apikey|secret|access-token|auth-token|client-secret)(?:=|\s+))[^\s\"']{4,}"),
+    re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s:/@]+:)[^\s@/]{3,}(?=@)"),
+]
+_SECRET_ASSIGN = re.compile(r"(?i)\b([A-Za-z0-9_]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|API_?KEY|_KEY|KEY_|TOKEN(?!S)|CREDENTIAL|PRIVATE_?KEY)[A-Za-z0-9_]*)(\s*[=:]\s*[\"']?)([^\s\"'&,;]{4,})")
+_SECRET_KEY = re.compile(r"(?i)^(?:.*[_-])?(?:password|passwd|secret|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|id[_-]?token|token|authorization|cookie|set[_-]?cookie|private[_-]?key|credentials?|client[_-]?secret|session[_-]?token)$")
 _MULTI = {"git", "npm", "pnpm", "yarn", "bun", "npx", "docker", "podman", "kubectl", "helm", "cargo", "go", "uv", "pip", "pip3", "poetry", "make", "systemctl", "wrangler", "fly", "flyctl", "vercel", "netlify", "gh", "terraform", "deno", "pytest", "ruff", "eslint", "tsc", "vitest", "jest", "crontab"}
 
 
 def redact(s: str) -> str:
     for rx in _SECRET_RES:
         s = rx.sub("[redacted]", s)
+    for rx in _SECRET_KEEP:
+        s = rx.sub(lambda m: f"{m.group(1)}[redacted]", s)
     return _SECRET_ASSIGN.sub(lambda m: f"{m.group(1)}{m.group(2)}[redacted]", s)
 
 
@@ -120,6 +140,12 @@ def command_head(cmd: str) -> str:
     return " && ".join(heads)[:80]
 
 
+def _host(u: str) -> str:
+    """Only the host of a URL (metadata privacy): paths can carry tokens (api.telegram.org/bot<token>/…)."""
+    m = re.match(r"^[a-z][a-z0-9+.-]*://(?:[^@/]*@)?([^/?#]+)", u, re.I)
+    return m.group(1)[:200] if m else "(url)"
+
+
 def _host_path(u: str) -> str:
     m = re.match(r"^[a-z][a-z0-9+.-]*://(?:[^@/]*@)?([^/?#]+)([^?#]*)", u, re.I)
     return (m.group(1) + (m.group(2) if m.group(2) not in ("", "/") else ""))[:200] if m else u.split("?")[0][:200]
@@ -133,9 +159,9 @@ def trim_args(tool: Optional[str], args: Any, privacy: str) -> Optional[Dict[str
     if privacy == "metadata":
         for k in ("path", "file_path", "filepath", "mode"):
             if isinstance(args.get(k), str):
-                out[k] = args[k][:300]
+                out[k] = _clip(args[k], 300)
         if isinstance(args.get("url"), str):
-            out["url"] = _host_path(args["url"])
+            out["url"] = _host(args["url"])
         if isinstance(args.get("command"), str):
             out["command"] = command_head(args["command"])
         if tool == "patch" and isinstance(args.get("patch"), str):
@@ -274,15 +300,40 @@ class Config:
 Post = Callable[[str, bytes, Dict[str, str], float], int]
 
 
-def _urllib_post(url: str, body: bytes, headers: Dict[str, str], timeout: float) -> int:
-    class _NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *a: Any, **k: Any) -> None:  # a redirected POST would drop the body
-            return None
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects: a redirected POST drops its body, and urllib would replay the
+    Authorization header (the ingest token) to whatever host the Location header names."""
 
+    def redirect_request(self, *a: Any, **k: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
+def _urllib_post(url: str, body: bytes, headers: Dict[str, str], timeout: float) -> int:
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    opener = urllib.request.build_opener(_NoRedirect())
-    with opener.open(req, timeout=timeout) as r:
+    with _OPENER.open(req, timeout=timeout) as r:
         return int(r.status)
+
+
+def _urllib_get_json(url: str, headers: Dict[str, str], timeout: float) -> Dict[str, Any]:
+    req = urllib.request.Request(url, headers=headers)
+    with _OPENER.open(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def insecure_remote(url: str) -> bool:
+    """http:// to anything but this machine or a private network: the token would cross the internet in clear text."""
+    m = re.match(r"^http://(\[[^\]]+\]|[^/:?#\[]+)", url.strip(), re.I)
+    if not m:
+        return False
+    h = m.group(1).strip("[]").lower()
+    if h in ("localhost", "::1") or h.endswith(".localhost") or h.endswith(".local") or h.endswith(".internal"):
+        return False
+    if re.match(r"^(127\.|10\.|192\.168\.|169\.254\.)", h) or re.match(r"^172\.(1[6-9]|2\d|3[01])\.", h) or re.match(r"^(fc|fd)[0-9a-f]{2}:", h):
+        return False
+    return True
 
 
 class Sender:
@@ -290,6 +341,7 @@ class Sender:
 
     def __init__(self, cfg: Config, post: Optional[Post] = None, cost_fn: Optional[Callable[[Dict[str, Any]], Optional[float]]] = None) -> None:
         self.cfg = cfg
+        self._warned_http = False
         self._post = post or _urllib_post
         self._cost_fn = cost_fn
         self._q: "queue.Queue[Optional[Dict[str, Any]]]" = queue.Queue(maxsize=cfg.queue_max)
@@ -362,6 +414,9 @@ class Sender:
                     except Exception:
                         pass
                     env["extra"].pop("_pricing", None)
+        if not self._warned_http and insecure_remote(self.cfg.url):
+            self._warned_http = True
+            logger.warning("hermes-overtime: OVERTIME_URL is plain http to a public host; the ingest token travels unencrypted. Use https.")
         body = json.dumps({"batch": batch}, ensure_ascii=False, default=str).encode("utf-8")
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.cfg.token}", "User-Agent": f"hermes-overtime/{__version__}"}
         try:
@@ -506,9 +561,7 @@ class Plugin:
                     "OVERTIME_TOKEN in ~/.hermes/.env and restart Hermes.")
         link = ""
         try:
-            req = urllib.request.Request(self.cfg.share_url, headers={"Authorization": f"Bearer {self.cfg.token}", "User-Agent": f"hermes-overtime/{__version__}"})
-            with urllib.request.urlopen(req, timeout=self.cfg.timeout) as r:
-                link = json.loads(r.read().decode("utf-8")).get("watch", "")
+            link = str(_urllib_get_json(self.cfg.share_url, {"Authorization": f"Bearer {self.cfg.token}", "User-Agent": f"hermes-overtime/{__version__}"}, self.cfg.timeout).get("watch", ""))
         except Exception as exc:
             link = f"(could not fetch the viewer link: {type(exc).__name__})"
         s = self.sender.stats
