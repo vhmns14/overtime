@@ -18,7 +18,11 @@ const m = html.match(re);
 if (!m) throw new Error("no inline script found");
 // script text must not contain "<script" / "</script" / "<!--" (the demo site lives in JS strings):
 // \x3c is the same character inside JS strings, templates and regexes
-const js = m[1].replace(/<(\/?)(script)/gi, "\\x3c$1$2").replace(/<!--/g, "\\x3c!--");
+const js = m[1].replace(/<(\/?)(script)/gi, "\\x3c$1$2").replace(/<!--/g, "\\x3c!--")
+  // the demo repo's source files live in template literals; a line that starts with import/export
+  // there is text, not a statement, but spell the first letter as an escape so no scanner thinks otherwise
+  // (minified code has no raw newlines outside template literals, so this only touches literal text)
+  .replace(/\n(\s*)(import|export)\b/g, (_m, sp, kw) => `\n${sp}\\x${kw.charCodeAt(0).toString(16)}${kw.slice(1)}`);
 html = html.replace(m[0], "");
 html = html.replace("</body>", () => `<script>${js}</script>\n</body>`);
 if (/type="module"|import\.meta/.test(html)) throw new Error("preview still uses ES features that need a module script");

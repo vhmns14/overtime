@@ -41,3 +41,33 @@ test("preview.html runs the demo offline in a sandboxed iframe", async ({ page }
   expect(network).toEqual([]);
   expect(errors).toEqual([]);
 });
+
+test("preview.html runs the PR demo offline (mocked GitHub in memory)", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 600, "desktop only");
+  test.skip(!existsSync("preview.html"), "run npm run build:preview first");
+  const html = readFileSync("preview.html", "utf8");
+  const errors: string[] = [];
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  page.on("pageerror", (e) => errors.push(String(e)));
+  const network: string[] = [];
+  await page.route("http://preview.test/**", (route) => {
+    const u = new URL(route.request().url());
+    if (u.pathname === "/") return route.fulfill({ contentType: "text/html", body: `<!doctype html><body style="margin:0"><iframe id="f" sandbox="allow-scripts" src="/preview.html?speed=0.2" style="width:1440px;height:900px;border:0"></iframe></body>` });
+    if (u.pathname === "/preview.html") return route.fulfill({ contentType: "text/html", body: html });
+    network.push(u.pathname);
+    return route.fulfill({ status: 404, body: "" });
+  });
+  await page.goto("http://preview.test/");
+  const f = page.frameLocator("#f");
+  await f.locator("#task-kind").selectOption("repo-fix");
+  await f.locator("#run-btn").click();
+  for (const title of [/PM wants to start with 5 tickets/, /1 check failing, fix before the PR/, /Ops wants to open a PR/]) {
+    await expect(f.locator("#approval")).toContainText(title, { timeout: 90_000 });
+    await f.locator('#approval [data-act="approve"]').click();
+  }
+  await expect(f.locator("#result")).toContainText("Pull request #8 is open", { timeout: 60_000 });
+  await f.locator('#result [data-r="changes"]').click();
+  await expect(f.locator("#files [data-diff-view] .ln.add")).toHaveText(["  return item.price * (item.qty ?? 1);"]);
+  expect(network).toEqual([]);
+  expect(errors).toEqual([]);
+});

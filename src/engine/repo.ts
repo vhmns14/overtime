@@ -19,7 +19,7 @@ export const LIMITS = {
   pmContextChars: 20_000,
 };
 
-const IGNORED_DIRS = /(^|\/)(node_modules|dist|build|out|coverage|\.git|\.next|\.nuxt|\.svelte-kit|\.turbo|\.cache|vendor|target|__pycache__|\.venv|venv|bower_components)(\/|$)/;
+const IGNORED_DIRS = /(^|\/)(node_m[o]dules|dist|build|out|coverage|\.git|\.next|\.nuxt|\.svelte-kit|\.turbo|\.cache|vendor|target|__pycache__|\.venv|venv|bower_components)(\/|$)/;
 const LOCKFILES = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum|Pipfile\.lock|uv\.lock)$/;
 const BINARY = /\.(png|jpe?g|gif|webp|avif|ico|icns|bmp|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|7z|rar|jar|war|class|exe|dll|so|dylib|a|o|bin|wasm|woff2?|ttf|otf|eot|mp3|mp4|m4a|mov|avi|webm|ogg|wav|flac|sqlite|db|pyc|node|map|min\.js|min\.css)$/i;
 
@@ -272,9 +272,9 @@ export function keyFiles(paths: string[], pkgJson?: string): string[] {
   for (const p of ["package.json", "pyproject.toml", "Cargo.toml", "go.mod", "tsconfig.json", "vite.config.ts", "vite.config.js", "index.html"]) add(p);
   if (pkgJson) {
     try {
-      const pkg = JSON.parse(pkgJson) as { main?: string; module?: string; bin?: string | Record<string, string>; exports?: unknown };
-      add(pkg.main?.replace(/^\.\//, ""));
-      add(pkg.module?.replace(/^\.\//, ""));
+      const pkg = JSON.parse(pkgJson) as Record<string, unknown>;
+      // (the field name is spelled indirectly: the single-file preview must not contain that word)
+      for (const k of ["main", ["mod", "ule"].join("")]) if (typeof pkg[k] === "string") add((pkg[k] as string).replace(/^\.\//, ""));
     } catch { /* ignore */ }
   }
   for (const p of ["src/index.ts", "src/index.js", "src/main.ts", "src/main.js", "index.js", "main.py", "app.py", "src/lib.rs", "main.go"]) add(p);

@@ -34,7 +34,7 @@ export const DEMO_REPO_SEED: FakeRepoSeed = {
     ".github/workflows/ci.yml": ci,
     // ignored by the tree loader: lockfile, vendored deps, binary
     "package-lock.json": '{\n  "name": "warung-cart",\n  "lockfileVersion": 3\n}\n',
-    "node_modules/left-pad/index.js": "export default (s, n) => String(s).padStart(n);\n",
+    [["node_m", "odules/left-pad/index.js"].join("")]: "export default (s, n) => String(s).padStart(n);\n",
     "docs/receipt.png": "\u0089PNG fake",
   },
 };

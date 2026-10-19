@@ -250,7 +250,7 @@ export class App {
       case "deployed": this.deployed = { url: e.url, local: e.local }; break;
       case "changes": if (!$("#files").hidden) this.renderFiles(); break;
       case "pr":
-        void this.office.celebrate("ops", `PR #${e.number}`, `PR #${e.number} is open! 🎉`);
+        void this.office.celebrate("ops", `PR #${e.number}`, `PR #${e.number} is open!`);
         break;
       case "done": this.renderResult(); break;
       default: break;
