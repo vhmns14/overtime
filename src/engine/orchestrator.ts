@@ -411,7 +411,7 @@ export class Orchestrator {
           break;
         }
         const fixes = Array.isArray(vcall.args.fixes) ? (vcall.args.fixes as unknown[]).map(String) : [];
-        this.say("reviewer", `${report.failures} check${report.failures > 1 ? "s" : ""} failing: ${summarizeReport(report)}`, "warn");
+        this.say("reviewer", `${report.failures} check${report.failures > 1 ? "s" : ""} failing: ${report.results.filter((r) => r.status === "fail").map((r) => r.label.toLowerCase()).join(", ")}`, "warn");
         if (round >= cfg.maxReviewRounds) {
           this.say("reviewer", `still failing after ${round} fix round${round > 1 ? "s" : ""}; stopping the loop`, "warn");
           if (cfg.gates.review) {

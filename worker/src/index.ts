@@ -4,7 +4,7 @@
 
 export interface Env {
   ASSETS: Fetcher;
-  PREVIEWS: DurableObjectNamespace<PreviewStore>;
+  PREVIEWS: DurableObjectNamespace;
   /** "1" lets the proxy reach http://localhost (wrangler dev only) */
   ALLOW_LOCAL_LLM?: string;
   PREVIEW_TTL_DAYS?: string;
@@ -12,7 +12,6 @@ export interface Env {
 
 import { DurableObject } from "cloudflare:workers";
 import { RUN_ID, MAX_FILES, MAX_TOTAL, PREVIEW_CSP, TYPES, safePath, isPrivateHost, json, CORS, htmlToText } from "./lib";
-export { PREVIEW_CSP, safePath, isPrivateHost, htmlToText };
 
 async function proxyLLM(req: Request, env: Env): Promise<Response> {
   const base = req.headers.get("x-ot-base-url") ?? "";
@@ -60,6 +59,12 @@ async function fetchPage(url: string): Promise<Response> {
   return json({ url: u.toString(), title, text });
 }
 
+interface PreviewRPC {
+  put(id: string, task: string, files: Record<string, string>, ttlDays: number): Promise<unknown>;
+  get(path: string): Promise<string | null>;
+  meta(): Promise<unknown>;
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -73,7 +78,7 @@ export default {
       if (run) {
         const id = run[1];
         if (!RUN_ID.test(id)) return json({ error: "invalid run id" }, 400);
-        const stub = env.PREVIEWS.get(env.PREVIEWS.idFromName(id));
+        const stub = env.PREVIEWS.get(env.PREVIEWS.idFromName(id)) as unknown as PreviewRPC;
         if (req.method === "PUT") {
           let body: { task?: string; files?: Record<string, string> };
           try {
@@ -106,14 +111,13 @@ export default {
         let file = decodeURIComponent(p[2].slice(1));
         if (file === "" || file.endsWith("/")) file += "index.html";
         const sp = safePath(file);
-        const stub = env.PREVIEWS.get(env.PREVIEWS.idFromName(id));
+        const stub = env.PREVIEWS.get(env.PREVIEWS.idFromName(id)) as unknown as PreviewRPC;
         const content = sp ? await stub.get(sp) : null;
         const headers = {
           "content-security-policy": PREVIEW_CSP,
           "x-content-type-options": "nosniff",
           "referrer-policy": "no-referrer",
           "cache-control": "no-store",
-          "cross-origin-resource-policy": "same-origin",
         };
         if (content === null) return new Response("Not found", { status: 404, headers: { ...headers, "content-type": "text/plain" } });
         const ext = sp!.split(".").pop()!.toLowerCase();

@@ -106,6 +106,6 @@ H = y + rowh
 atlas = Image.new('RGBA', (W, H), (0, 0, 0, 0))
 for name, im in frames.items():
   f = out[name]; atlas.paste(im, (f['x'], f['y']))
-atlas.save('public/atlas.png', optimize=True)
+atlas.save('src/assets/atlas.png', optimize=True)
 json.dump(dict(size=[W, H], frames=out), open('src/office/atlas.json', 'w'), indent=0)
 print('atlas', W, H, len(out))

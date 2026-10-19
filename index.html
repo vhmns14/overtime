@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Overtime · an AI team you can watch</title>
+  <meta name="description" content="Overtime: give a task, watch a team of AI agents build it in a pixel-art office, approve the steps that matter. Bring your own key, or try the demo." />
+  <meta name="theme-color" content="#0b0908" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23f3eee4'/%3E%3Crect x='3' y='3' width='10' height='10' fill='%23111'/%3E%3Crect x='6' y='6' width='4' height='4' fill='%23e8742f'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="mobile-bar"><span class="mark mark-sm" aria-hidden="true"></span><span class="sr-only">Overtime</span>
+      <div class="bar-actions">
+        <button class="icon-btn" data-open="files" aria-label="Files and preview">Files</button>
+        <button class="icon-btn" data-open="settings" aria-label="Settings">Settings</button>
+      </div>
+    </header>
+    <section class="office" id="office" aria-label="Office">
+      <div class="office-chip" id="mode-chip"></div>
+      <div class="agent-card" id="agent-card" hidden></div>
+    </section>
+    <aside class="panel" id="panel" aria-label="Run panel">
+      <div class="grabber" aria-hidden="true"></div>
+      <div class="panel-head">
+        <h1 class="mark" aria-label="Overtime"></h1>
+        <nav class="panel-nav">
+          <button class="link-btn" data-open="files">Files</button>
+          <button class="link-btn" data-open="history">History</button>
+          <button class="link-btn" data-open="settings">Settings</button>
+        </nav>
+      </div>
+      <h2 class="run-title" id="run-title"></h2>
+      <form class="task" id="task-form" autocomplete="off">
+        <label class="sr-only" for="task">Task</label>
+        <textarea id="task" rows="2" maxlength="600" spellcheck="false"></textarea>
+        <div class="task-notes" id="notes-wrap" hidden>
+          <label for="notes">Brief notes <span>(optional)</span></label>
+          <textarea id="notes" rows="3" maxlength="4000" placeholder="Audience, sections, colours, copy you already have…"></textarea>
+          <label for="ref-url">Reference URL <span>(Research reads it as data)</span></label>
+          <input id="ref-url" type="url" placeholder="https://…" />
+        </div>
+        <div class="task-row">
+          <button type="button" class="link-btn" id="notes-toggle">+ Brief notes</button>
+          <span class="task-mode" id="task-mode"></span>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-ghost" id="pause-btn" hidden>Pause</button>
+          <button type="button" class="btn btn-ghost" id="cancel-btn" hidden>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="run-btn">Run</button>
+        </div>
+      </form>
+      <ol class="steps" id="steps" aria-label="Progress"></ol>
+      <ol class="steps-h" id="steps-h" aria-hidden="true"></ol>
+      <div class="log-wrap">
+        <ol class="log" id="log" aria-live="polite" aria-label="Activity log"></ol>
+      </div>
+      <div class="approval" id="approval" hidden></div>
+      <div class="result" id="result" hidden></div>
+      <button type="button" class="cost" id="cost" aria-expanded="false">
+        <span class="cost-row"><span>Token Cost</span><b id="cost-usd">$0.00</b></span>
+        <span class="cost-bar"><i id="cost-fill"></i></span>
+        <span class="cost-meta" id="cost-meta">0 tokens · cap $0.50</span>
+        <span class="cost-break" id="cost-break" hidden></span>
+      </button>
+      <footer class="credit">Open source · MIT · <a href="https://github.com/vhmns14" rel="noopener" target="_blank">vhmns</a> · Kode Kecil</footer>
+    </aside>
+  </div>
+  <div class="sheet-modal" id="mobile-approval" hidden role="dialog" aria-modal="true" aria-labelledby="ma-title"></div>
+  <div class="overlay" id="files" hidden role="dialog" aria-modal="true" aria-label="Files and preview"></div>
+  <div class="overlay overlay-narrow" id="settings" hidden role="dialog" aria-modal="true" aria-label="Settings"></div>
+  <div class="overlay overlay-narrow" id="history" hidden role="dialog" aria-modal="true" aria-label="Run history"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
