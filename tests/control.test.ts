@@ -404,3 +404,24 @@ describe("control pings", () => {
     expect(JSON.parse(sock.sent[0])).toMatchObject({ type: "control" });
   });
 });
+
+describe("audit regressions: alarms and time zones", () => {
+  it("a throwing notification never costs the office its next alarm", async () => {
+    const o = await paired();
+    const obj = ns.get(o.runId) as unknown as { checkStuck(): Promise<void>; alarm(): Promise<void>; ctx: { alarm: number | null } };
+    obj.checkStuck = async () => { throw new Error("telegram exploded"); };
+    await expect(obj.alarm()).resolves.toBeUndefined();
+    expect(obj.ctx.alarm).toBeGreaterThan(Date.now());
+  });
+
+  it("budgets synced from the browser carry its time zone (Asia/Jakarta days, not UTC days)", async () => {
+    const { budgetSyncBody } = await import("../src/app/control");
+    const { tzOffsetMin } = await import("../src/ext/notify");
+    const o = await paired();
+    const r = await call("POST", `${o.base}/notify`, budgetSyncBody({ dailyUsd: 1, monthlyUsd: null }, "Asia/Jakarta"), o.ctl);
+    expect(r.status).toBe(200);
+    expect(r.json.settings.quiet.tz).toBe("Asia/Jakarta");
+    expect(r.json.settings.budget.dailyUsd).toBe(1);
+    expect(tzOffsetMin(Date.UTC(2026, 9, 19, 17, 30), "Asia/Jakarta")).toBe(-420);
+  });
+});

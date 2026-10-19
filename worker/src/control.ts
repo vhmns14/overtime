@@ -723,7 +723,9 @@ export class ControlOffice extends ExtOffice {
 
   override async alarm() {
     const t = now();
-    await this.checkStuck(t);
+    // a failing notification must never cost the office its next alarm (expiry, the next stuck check):
+    // an alarm handler that throws is retried a few times and then dropped by the runtime
+    try { await this.checkStuck(t); } catch { /* the next alarm checks again */ }
     if (t >= this.ttlDue()) return super.alarm();
     await this.scheduleAlarm();
   }

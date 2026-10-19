@@ -45,6 +45,11 @@ const when = (t: number) => {
 };
 const mmss = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
+/** Budgets go with this browser's time zone: "today" and "this month" are the user's, not UTC's. */
+export function budgetSyncBody(b: { dailyUsd: number | null; monthlyUsd: number | null }, tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC") {
+  return { settings: { budget: { dailyUsd: b.dailyUsd, monthlyUsd: b.monthlyUsd }, quiet: { tz } } };
+}
+
 export function defaultDeviceName(ua = navigator.userAgent): string {
   const os = /Android/.test(ua) ? "Android" : /iPhone|iPad|iPod/.test(ua) ? "iPhone" : /Mac OS X/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "Device";
   const br = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
@@ -130,7 +135,7 @@ export class ControlController {
   /** Insights' budgets → the office's server-side budget notifications (only on a paired device). */
   async syncBudget(b: { dailyUsd: number | null; monthlyUsd: number | null }): Promise<boolean> {
     if (!this.paired) return false;
-    const r = await this.api("POST", "notify", { settings: { budget: { dailyUsd: b.dailyUsd, monthlyUsd: b.monthlyUsd } } }).catch(() => ({ status: 0 }));
+    const r = await this.api("POST", "notify", budgetSyncBody(b)).catch(() => ({ status: 0 }));
     return r.status === 200;
   }
   get canEnable() { return !!this.office?.ingestToken && !this.paired; }

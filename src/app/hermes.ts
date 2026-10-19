@@ -55,6 +55,8 @@ export class HermesController {
   private wsTries = 0;
   private pollTimer = 0;
   private reconnectTimer = 0;
+  /** bumped on every connect/disconnect: a slow answer for an office we already left is dropped */
+  private connGen = 0;
   private live = false; // false while replaying history: no animations
   private conn: "idle" | "connecting" | "open" | "polling" | "error" = "idle";
   private connError = "";
@@ -128,6 +130,7 @@ export class HermesController {
   }
 
   private disconnectStream() {
+    this.connGen++;
     clearTimeout(this.reconnectTimer);
     clearInterval(this.pollTimer);
     if (this.ws) {
@@ -174,17 +177,22 @@ export class HermesController {
 
   private async connect(id: string, token: string) {
     this.disconnectStream();
+    const gen = this.connGen;
+    const stale = () => gen !== this.connGen;
     this.conn = "connecting";
     this.render();
     try {
       const m = await fetch(`/api/ext/runs/${encodeURIComponent(id)}`, { headers: { authorization: `Bearer ${token}` } });
+      if (stale()) return;
       if (m.status === 401 || m.status === 404) {
         this.conn = "error";
         this.connError = this.mode === "watch" ? "This viewer link is not valid (or the office expired)." : "This office no longer exists on the Worker. Create a new one.";
         this.render();
         return;
       }
-      this.meta = await m.json();
+      const meta = await m.json();
+      if (stale()) return;
+      this.meta = meta;
       const total = Number((this.meta as { events?: number }).events ?? 0);
       const sessions = (this.meta.sessions ?? []) as { id: string }[];
       let events: ExtEvent[] = [];
@@ -193,6 +201,8 @@ export class HermesController {
         const r = await fetch(`/api/ext/runs/${encodeURIComponent(id)}/events?${q}`, { headers: { authorization: `Bearer ${token}` } });
         events = ((await r.json()) as { events: ExtEvent[] }).events ?? [];
       }
+      // the user may have switched floors / offices while this was loading: never mix them
+      if (stale()) return;
       this.live = false;
       for (const e of events) this.ingest(e);
       this.live = true;
@@ -201,6 +211,7 @@ export class HermesController {
       this.syncScene();
       this.openStream(id, token);
     } catch (e) {
+      if (stale()) return;
       this.conn = "error";
       this.connError = `Could not reach the Overtime Worker (${(e as Error).message}).`;
       this.render();
