@@ -135,6 +135,8 @@ export interface LogEntry {
   agent: Role | "system";
   text: string;
   level?: "info" | "warn" | "error";
+  /** display name when it differs from the role (an external agent's subagent at a borrowed desk) */
+  name?: string;
 }
 
 export type RunStatus = "idle" | "running" | "paused" | "waiting" | "done" | "failed" | "cancelled" | "budget";

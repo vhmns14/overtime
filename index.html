@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Overtime · an AI team you can watch</title>
-  <meta name="description" content="Overtime: give a task, watch a team of AI agents build it in a pixel-art office, approve the steps that matter. Bring your own key, or try the demo." />
+  <title>Overtime · watch your Hermes agent work</title>
+  <meta name="description" content="Overtime: watch your own Hermes agent work live in a pixel-art office: tool calls, subagents, approvals and cost. Or give a task to the built-in team of agents." />
   <meta name="theme-color" content="#0b0908" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23f3eee4'/%3E%3Crect x='3' y='3' width='10' height='10' fill='%23111'/%3E%3Crect x='6' y='6' width='4' height='4' fill='%23e8742f'/%3E%3C/svg%3E" />
 </head>
@@ -33,6 +33,7 @@
           <select id="task-kind"></select>
           <button type="button" class="repo-chip" id="repo-btn" hidden></button>
         </div>
+        <div class="hx" id="hermes-box" hidden></div>
         <textarea id="task" rows="2" maxlength="1200" spellcheck="false"></textarea>
         <div class="task-notes" id="notes-wrap" hidden>
           <label for="notes">Brief notes <span>(optional)</span></label>
@@ -75,6 +76,7 @@
   <div class="overlay overlay-narrow" id="settings" hidden role="dialog" aria-modal="true" aria-label="Settings"></div>
   <div class="overlay overlay-narrow" id="history" hidden role="dialog" aria-modal="true" aria-label="Run history"></div>
   <div class="overlay overlay-narrow" id="github" hidden role="dialog" aria-modal="true" aria-label="Connect GitHub"></div>
+  <div class="overlay overlay-narrow" id="hermes" hidden role="dialog" aria-modal="true" aria-label="Connect Hermes"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

@@ -1,0 +1,691 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/vhmns14/overtime/docs/events.schema.json#overtime.events.v1",
+  "title": "Overtime external-agent event (v1)",
+  "description": "One event an agent sends to an Overtime office. POST one, an array, or {\"events\": [...]} (max 200, 256 KB per request) to /api/ext/runs/<office>/events with Authorization: Bearer <ingest token>. Unknown data fields are dropped; strings are clipped; secrets are redacted before storage.",
+  "type": "object",
+  "required": [
+    "type",
+    "data"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "const": 1,
+      "description": "Schema version. Optional; 1 if omitted."
+    },
+    "type": {
+      "enum": [
+        "session.start",
+        "session.end",
+        "agent.thinking",
+        "llm.call",
+        "tool.start",
+        "tool.end",
+        "file.write",
+        "plan.update",
+        "subagent.start",
+        "subagent.stop",
+        "approval.request",
+        "approval.response",
+        "human_input.request",
+        "human_input.resolved",
+        "message",
+        "error"
+      ]
+    },
+    "ts": {
+      "description": "Epoch milliseconds, epoch seconds, or an ISO-8601 string. Defaults to the time the server received it.",
+      "oneOf": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "string",
+          "format": "date-time"
+        }
+      ]
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[\\w.:@/-]{1,128}$",
+      "description": "The agent's session/conversation id. Default 'default'."
+    },
+    "agent": {
+      "type": "string",
+      "pattern": "^[\\w.:@/-]{1,128}$",
+      "description": "'main' (default) or a subagent id from subagent.start."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[\\w.:@/-]{1,128}$",
+      "description": "Optional idempotency key; a repeated id is ignored."
+    },
+    "data": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "session.start"
+          }
+        }
+      },
+      "then": {
+        "description": "A conversation/session began (Hermes: on_session_start). Offices are long-lived; each session is listed separately.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "platform": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "profile": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "cwd": {
+                "type": "string",
+                "maxLength": 400
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "session.end"
+          }
+        }
+      },
+      "then": {
+        "description": "A turn or session ended. final=true when the session identity is torn down (Hermes: on_session_finalize).",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "completed",
+                  "interrupted",
+                  "failed"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 400
+              },
+              "final": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "agent.thinking"
+          }
+        }
+      },
+      "then": {
+        "description": "The agent is thinking or about to call its model. Shown at the PM's desk.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "maxLength": 4000
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "llm.call"
+          }
+        }
+      },
+      "then": {
+        "description": "One model API call with token usage and, when known, its cost in USD. Feeds the cost meter.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "provider": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "input_tokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "output_tokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cache_read_tokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cache_write_tokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "reasoning_tokens": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cost_usd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "duration_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "finish_reason": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "tool_calls": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "tool.start"
+          }
+        }
+      },
+      "then": {
+        "description": "A tool call began. args_summary/target are already trimmed to the sender's privacy level.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "call_id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "args_summary": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "target": {
+                "type": "string",
+                "maxLength": 400
+              }
+            },
+            "required": [
+              "name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "tool.end"
+          }
+        }
+      },
+      "then": {
+        "description": "A tool call finished (ok or not), with its duration.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "call_id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "duration_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "error": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "output_summary": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "target": {
+                "type": "string",
+                "maxLength": 400
+              }
+            },
+            "required": [
+              "name",
+              "ok"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "file.write"
+          }
+        }
+      },
+      "then": {
+        "description": "A file was written, edited, patched or deleted.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "maxLength": 400
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "write",
+                  "edit",
+                  "patch",
+                  "delete"
+                ]
+              },
+              "added": {
+                "type": "number",
+                "minimum": 0
+              },
+              "removed": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "plan.update"
+          }
+        }
+      },
+      "then": {
+        "description": "The agent's current plan / todo list. Shown as stickies on the whiteboard.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 40,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "text"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "text": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "todo",
+                        "doing",
+                        "done",
+                        "cancelled"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "items"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "subagent.start"
+          }
+        }
+      },
+      "then": {
+        "description": "A delegated child agent started. It borrows a free desk; events with agent=<id> (or session=child_session) are shown there.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "role": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "goal": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "child_session": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "subagent.stop"
+          }
+        }
+      },
+      "then": {
+        "description": "A delegated child agent finished or failed.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "status": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 1200
+              },
+              "duration_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "tools": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "approval.request"
+          }
+        }
+      },
+      "then": {
+        "description": "The agent is waiting for a human to approve something in its own UI. Overtime shows it read-only.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "command": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "surface": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "pattern": {
+                "type": "string",
+                "maxLength": 128
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "approval.response"
+          }
+        }
+      },
+      "then": {
+        "description": "The approval was answered (once, session, always, deny, timeout, cancelled).",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "choice": {
+                "type": "string",
+                "maxLength": 32
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "human_input.request"
+          }
+        }
+      },
+      "then": {
+        "description": "The agent is blocked on a person (clarify question, sudo password, approval).",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "kind": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "prompt": {
+                "type": "string",
+                "maxLength": 600
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "human_input.resolved"
+          }
+        }
+      },
+      "then": {
+        "description": "The wait for a person ended.",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "outcome": {
+                "type": "string",
+                "maxLength": 32
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "message"
+          }
+        }
+      },
+      "then": {
+        "description": "A user or assistant message (only sent at the 'full' privacy level).",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "assistant"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "role",
+              "text"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "description": "Something went wrong (provider error, crash).",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "maxLength": 600
+              },
+              "kind": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "message"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

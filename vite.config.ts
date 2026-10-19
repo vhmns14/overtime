@@ -1,6 +1,27 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { viteSingleFile } from "vite-plugin-singlefile";
+import type { Plugin } from "vite";
+
+/** Serves the Hermes plugin from the app itself, so the Connect screen's curl lines point at your own deployment. */
+function hermesPluginFiles(): Plugin {
+  const files = ["plugin.yaml", "__init__.py"];
+  return {
+    name: "hermes-overtime-files",
+    generateBundle() {
+      for (const f of files) this.emitFile({ type: "asset", fileName: `hermes-overtime/${f}`, source: readFileSync(resolve(__dirname, "integrations/hermes-overtime", f), "utf8") });
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const m = req.url?.match(/^\/hermes-overtime\/(plugin\.yaml|__init__\.py)$/);
+        if (!m) return next();
+        res.setHeader("content-type", "text/plain; charset=utf-8");
+        res.end(readFileSync(resolve(__dirname, "integrations/hermes-overtime", m[1]), "utf8"));
+      });
+    },
+  };
+}
 
 const PREVIEW = process.env.PREVIEW === "1";
 
@@ -15,6 +36,6 @@ export default defineConfig({
         rollupOptions: { input: resolve(__dirname, "index.html"), output: { format: "iife", inlineDynamicImports: true } },
       }
     : { outDir: "dist", assetsInlineLimit: 4096 },
-  plugins: PREVIEW ? [viteSingleFile({ removeViteModuleLoader: true })] : [],
+  plugins: PREVIEW ? [viteSingleFile({ removeViteModuleLoader: true })] : [hermesPluginFiles()],
   server: { port: 5173, proxy: { "/api": "http://127.0.0.1:8787", "/p/": "http://127.0.0.1:8787" } },
 });

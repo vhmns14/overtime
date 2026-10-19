@@ -1,0 +1,25 @@
+name: hermes-overtime
+version: "0.1.0"
+description: Watch this Hermes agent work live in Overtime's pixel office. Observer hooks only; events are batched off the agent thread and dropped (never retried forever) when Overtime is unreachable.
+author: vhmns · Kode Kecil
+# Observer hooks only. This plugin never blocks, modifies, or approves anything.
+provides_hooks:
+  - on_session_start
+  - on_session_end
+  - on_session_finalize
+  - on_session_reset
+  - agent_loop_stopped
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - on_interim_message
+  - post_tool_call
+  - post_llm_call
+  - subagent_start
+  - subagent_stop
+  - pre_approval_request
+  - post_approval_response
+  - on_human_input_request
+  - on_human_input_resolved
+# OVERTIME_URL and OVERTIME_TOKEN come from Overtime's "Connect Hermes" screen; put them in ~/.hermes/.env.
+# Without them the plugin loads, sends nothing, and /overtime explains how to connect.

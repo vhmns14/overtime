@@ -10,8 +10,9 @@ export function trackErrors(page: Page) {
 export const isMobile = (page: Page) => (page.viewportSize()?.width ?? 1000) < 600;
 export const gateSel = (page: Page) => (isMobile(page) ? "#mobile-approval" : "#approval");
 
-export async function openApp(page: Page, speed = 0.2) {
-  await page.goto(`/?speed=${speed}`);
+/** Opens the app on a built-in-team demo by default (the first visit itself is "Watch my Hermes"). */
+export async function openApp(page: Page, speed = 0.2, target: string | null = "kopi-senja") {
+  await page.goto(`/?speed=${speed}${target ? `&target=${target}` : ""}`);
   await expect(page.locator("#run-btn")).toBeVisible();
   await expect(page.locator(".office-canvas")).toBeVisible();
 }

@@ -1,10 +1,76 @@
 # Overtime
 
-**Give a task and watch a small team of AI agents build it in a pixel-art office. You approve the steps that matter.**
+**Watch your own Hermes agent work in a pixel-art office.**
 
-Overtime is an open-source web app. Five agents (PM, Research, Coder, Reviewer, Ops) take a task like *"Build a landing page for Kopi Senja"* and turn it into a real static site, or take *"Fix: cart total ignores item quantity"* on **your existing GitHub repo** and open a real pull request. You watch them walk to their desks and type, meet at the round table for handoffs, put tickets on the whiteboard and grab coffee when they're idle. When a decision matters, they stop and wait for you.
+Overtime is an open-source web app. Connect the [Hermes Agent](https://hermes-agent.nousresearch.com/) you run on your server and every session plays out live in a small office: research at the Research desk, edits at the Coder's, tests with the Reviewer, deploys with Ops, the plan as stickies on the whiteboard, subagents at borrowed desks with their own name tags, approvals Hermes is waiting for, and what it all costs. Hermes keeps running where it runs; Overtime only receives events.
 
-The first visit runs in **demo mode**, so no key is needed. Two recorded demos replay through the real engine and the real checks: a landing page, and a bug fix in a small repo that ends in a pull request on a mocked GitHub. To run your own tasks on any OpenAI-compatible model, **bring your own key**.
+Overtime also has its own **built-in team** of five agents (PM, Research, Coder, Reviewer, Ops) that can build a static site or fix a bug in your GitHub repo and open a pull request, with approval gates you control.
+
+The first visit opens on **Connect Hermes**. No server yet? Pick **Demo · a recorded Hermes session**: a real session (plan, a subagent, a failing test fixed, an approval in Hermes' CLI) replayed through the same pipeline, fully offline.
+
+![A real Hermes 0.19 run (gpt-4o-mini, metadata privacy) in the office](docs/hermes-real-run-desktop.png)
+
+<p align="center"><img src="docs/hermes-connect-mobile.png" width="240" alt="Phone: Connect Hermes"> <img src="docs/hermes-live-mobile.png" width="240" alt="Phone: Hermes live, waiting for approval"> <img src="docs/hermes-real-run-mobile.png" width="240" alt="Phone: a real Hermes run"></p>
+
+| Connect: one office per Hermes install | Recorded demo: Hermes asks for approval in its own CLI |
+|---|---|
+| ![Connect Hermes setup](docs/hermes-setup-desktop.png) | ![Approval card](docs/hermes-demo-approval-desktop.png) |
+| **A subagent borrows the Research desk** | **Read-only viewer link for anyone** |
+| ![Subagent](docs/hermes-demo-subagent-desktop.png) | ![Watch view](docs/hermes-watch-desktop.png) |
+
+## Watch Hermes in Overtime
+
+1. Open Overtime and press **Connect Hermes**. Pick what Overtime may see (*metadata* by default). You get your **office**: it stays up, picks up every new Hermes session on its own (CLI, gateway chats, cron), and is deleted after 30 days without events.
+2. On the machine where Hermes runs, paste the setup the screen shows. It looks like this:
+
+   ```bash
+   # 1. the plugin: observer hooks only, one Python file, no dependencies
+   mkdir -p ~/.hermes/plugins/hermes-overtime
+   curl -fsSL https://<your-overtime>/hermes-overtime/plugin.yaml -o ~/.hermes/plugins/hermes-overtime/plugin.yaml
+   curl -fsSL https://<your-overtime>/hermes-overtime/__init__.py -o ~/.hermes/plugins/hermes-overtime/__init__.py
+   hermes plugins enable hermes-overtime      # if it asks about overriding built-in tools: no
+
+   # 2. point it at your office (values come from the Connect screen)
+   cat >> ~/.hermes/.env <<'EOF'
+   OVERTIME_URL=https://<your-overtime>/api/ext/runs/<office>/hermes
+   OVERTIME_TOKEN=ot_ing_…
+   OVERTIME_PRIVACY=metadata
+   EOF
+   ```
+
+3. Restart Hermes (a new `hermes` session, or restart the gateway) and check: `hermes overtime test` sends a test session; `/overtime` inside a session prints the office's viewer link.
+4. Run anything in Hermes. The screen leaves *Waiting for the first event…* and the office comes alive. With **Follow new sessions** on, it jumps to each new session; the picker shows older ones.
+
+**Hermes must be able to reach Overtime.** On one machine, `npm run dev` is enough. For a Hermes on a VPS, deploy Overtime to your Cloudflare account (`npm run deploy`) or expose your local copy through a tunnel.
+
+**No code at all:** Hermes builds with outbound webhooks (`hooks.outbound`) can POST every hook to Overtime themselves, HMAC-signed (`X-Hermes-Signature-256`). The Connect screen's **Webhooks** tab gives you the `config.yaml` block and the secret. Hermes 0.19.0 on PyPI does not have outbound webhooks yet; the plugin works there.
+
+What you see:
+
+| In the office | From Hermes |
+|---|---|
+| PM thinks, writes the plan on the whiteboard, delegates | model calls, `todo`, `delegate_task`, `clarify`, `memory`, skills |
+| Research walks to its desk and types | `web_search`, `web_extract`, `browser_*`, `read_file`, `search_files` |
+| Coder | `write_file`, `patch`, `terminal`, `execute_code` |
+| Reviewer | `terminal` running tests, lint or type checks (`pytest`, `npm run test`, `ruff`, `tsc`, …) |
+| Ops | `git push`, `docker`, `kubectl`, `wrangler`, `systemctl`, `cronjob_*` |
+| A subagent takes the next free desk with its name on the tag; PM hands off at the table, and gets it back | `subagent_start` / `subagent_stop` |
+| "Waiting for approval in Hermes" bubble and a read-only card | `pre_approval_request`, `on_human_input_request` |
+| Step tracker (Plan, Research, Code, Verify, Ship) and the cost meter | derived from activity; cost is Hermes' own estimate per model call |
+
+Rules for who shows what are editable (*Setup → Advanced*). **Overtime never approves anything**: Hermes asks in its own UI; the approval card is read-only, with a clean extension point (`src/ext/approvals.ts`) for remote approval later.
+
+**Privacy and security.** *Metadata* sends tool names, file paths, URL hosts, the first words of shell commands (`git push`, `npm run test`), statuses, durations, tokens and cost: no prompts, messages, file contents, full commands or outputs. *Args* and *full* add more, truncated. Anything that looks like a key or token is redacted on your Hermes machine and again by the Worker before storage. The ingest token can only write to its own office; the viewer link (`/watch/<office>#v=…`) is read-only and keeps its token in the URL fragment. Per-office rate limits, 256 KB/200-event request caps and the full event schema are in [docs/EVENTS.md](docs/EVENTS.md).
+
+**Other agents.** Anything can drive an office through the generic events API: `POST /api/ext/runs/<office>/events` with events like `{"type":"tool.start","session":"s1","data":{"name":"web_search"}}`. Schema: [docs/EVENTS.md](docs/EVENTS.md) and [docs/events.schema.json](docs/events.schema.json).
+
+**Tested against a real Hermes.** Hermes Agent 0.19.0 (PyPI) with `openai/gpt-4o-mini` on OpenRouter, the plugin installed with exactly the curl lines above, a small task (plan, write two files, run pytest) against `wrangler dev`: every hook arrived and the office above is that run. The outbound-webhook path was checked by running Hermes' own serialisation and signing code (`agent/outbound_webhooks.py` from `main`) against a local office.
+
+---
+
+## The built-in team
+
+Five agents take a task like *"Build a landing page for Kopi Senja"* and turn it into a real static site, or take *"Fix: cart total ignores item quantity"* on **your existing GitHub repo** and open a real pull request. You watch them walk to their desks and type, meet at the round table for handoffs, put tickets on the whiteboard and grab coffee when they're idle. When a decision matters, they stop and wait for you. Two recorded demos (a landing page; a bug fix that ends in a PR on a mocked GitHub) replay through the real engine, no key needed. To run your own tasks on any OpenAI-compatible model, **bring your own key**.
 
 ![Overtime on desktop](docs/screenshot-desktop.png)
 
@@ -33,7 +99,7 @@ The first visit runs in **demo mode**, so no key is needed. Two recorded demos r
 
 ---
 
-## Features
+## Features of the built-in team
 
 - **A live office.** Characters walk a nav graph between desks, the whiteboard, the meeting table and the coffee machine. Monitors glow while an agent types, lamps flicker and rain runs down the window. Click any agent to see its current thought, recent log, the files it touched and what it has spent.
 - **Real work, end to end.**
@@ -65,14 +131,14 @@ The first visit runs in **demo mode**, so no key is needed. Two recorded demos r
 - **Phone layout.** The office sits on top with a bottom sheet below. Approvals open as a full-screen card with the agent's portrait, a diff snippet and the spend so far.
 - **Files view.** File tree and code viewer, a version picker (Coder v1, v2…), a line diff against the previous iteration, a sandboxed preview iframe and a ZIP download.
 - **Run history** (last 8 runs) is saved in `localStorage`. Settings live there too. It degrades to memory when storage is blocked.
-- **Single-file offline build.** `npm run build:preview` produces `preview.html`: one inline classic `<script>` that runs the whole demo inside a sandboxed iframe with no network and no storage.
+- **Single-file offline build.** `npm run build:preview` produces `preview.html`: one inline classic `<script>` that runs all three demos (the recorded Hermes session first) inside a sandboxed iframe with no network and no storage.
 
 ## Quick start
 
 ```bash
 npm install
-npm run dev          # wrangler dev (Worker, previews, proxy) on :8787 + Vite on :5173
-# open http://localhost:5173 and press "Run demo"
+npm run dev          # wrangler dev (Worker, offices, previews, proxy) on :8787 + Vite on :5173
+# open http://localhost:5173 → "Connect Hermes", or pick "Demo · a recorded Hermes session"
 ```
 
 Other scripts:
@@ -81,9 +147,10 @@ Other scripts:
 |---|---|
 | `npm run build` | Type-checks, then builds the app into `dist/` (served by the Worker's static assets) |
 | `npm run dev:worker` | Serves `dist/` and the Worker together on :8787, the same way production does |
-| `npm test` | Vitest unit tests: orchestrator (both modes), tool calls, checks, budget cap, approvals, injection safety, mocked GitHub (tree, patches, branch, commit, PR, error paths, token redaction), mocked LLM (JSON repair, tool calling fallback, 429 backoff, streaming), the smoke script |
-| `npm run test:e2e` | Playwright at 390×844 and 1440×900. Run `npm run build` and `npm run build:preview` first |
-| `npm run build:preview` | Builds `preview.html` (both demos, fully offline) and prints its sha256 |
+| `npm test` | Vitest unit tests: external-agent schema, redaction, Hermes payload mapping, HMAC verification, token auth, rate and size limits, the office Durable Object on real SQLite, the office reducer (roles, subagents, approvals, cost, sessions; a captured real Hermes run and the recorded demo); orchestrator (both modes), tool calls, checks, budget cap, approvals, injection safety, mocked GitHub (tree, patches, branch, commit, PR, error paths, token redaction), mocked LLM (JSON repair, tool calling fallback, 429 backoff, streaming), the smoke script |
+| `npm run test:plugin` | pytest for the Hermes plugin: observer-only registration, privacy trimming, batching, timeouts, failure isolation |
+| `npm run test:e2e` | Playwright at 390×844 and 1440×900 (Connect Hermes flow, live events, watch view, the demos, 0 console errors). Run `npm run build` and `npm run build:preview` first |
+| `npm run build:preview` | Builds `preview.html` (all demos, fully offline) and prints its sha256 |
 | `npm run live:smoke` | A real end-to-end run from the terminal against your provider (and, optionally, your repo). See *Live smoke test* |
 | `npm run atlas` | Rebuilds the sprite atlas and office background from `art/raw/` |
 | `npm run deploy` | `wrangler deploy` to your own Cloudflare account. Nothing deploys unless you run it |
@@ -158,10 +225,12 @@ src/
     checks.ts        the Reviewer's real checks (parse5, contrast, links, a11y, JS/CSS syntax, size)
     llm.ts           OpenAI-compatible client: tool calling → JSON mode → prompt fallback, streaming, 429 backoff, test connection
     diff.ts zip.ts storage.ts
-  demo/              DemoLLM: recorded runs (Kopi Senja; warung-cart bug fix → PR), FakeGitHub (in-memory REST API), mock OpenAI server
+  ext/               external agents: event schema v1, redaction, Hermes mapper, role rules, office reducer, HMAC/tokens, pricing
+  demo/              recorded Hermes session; DemoLLM: recorded team runs (Kopi Senja; warung-cart bug fix → PR), FakeGitHub, mock OpenAI server
   office/            canvas renderer: pre-rendered isometric room + sprite atlas, nav graph, lights, rain
-  app/               UI controller (vanilla TS), settings, deploy/preview/GitHub
-worker/src/          Cloudflare Worker + SQLite Durable Object (one per run) for previews
+  app/               UI controller (vanilla TS), Hermes connect/live/watch (hermes.ts), settings, deploy/preview/GitHub
+worker/src/          Cloudflare Worker + SQLite Durable Objects: one per preview, one per external-agent office (ext.ts)
+integrations/hermes-overtime/   the Hermes plugin (plugin.yaml + __init__.py) and its pytest suite
 art/raw/             generated source art; scripts/build-atlas.py slices + packs it
 ```
 
@@ -177,6 +246,11 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 | `GET /api/fetch?url=` | Read-only page fetch for Research. Public hosts only, 1 MB cap, returns stripped text |
 | `PUT /api/runs/:id` | Stores the shipped files in that run's SQLite Durable Object. Validated paths, ≤80 files, ≤3 MB, expires after `PREVIEW_TTL_DAYS` through a DO alarm |
 | `GET /p/:id/*` | Serves the preview with strict headers (see *Security*) |
+| `POST /api/ext/runs` | Creates an external-agent office (SQLite Durable Object): office id, ingest token, view token, webhook secret |
+| `POST /api/ext/runs/:id/events` · `/hermes` | Generic events · Hermes plugin batches. Bearer ingest token, validated, redacted, rate-limited |
+| `POST /api/ext/hermes/webhook/:id` | Hermes outbound webhooks, HMAC-SHA256 (`X-Hermes-Signature-256`), 5-minute replay window, delivery dedupe |
+| `GET /api/ext/runs/:id/events` · `/stream` | Replay for late viewers · live WebSocket (hibernatable). View or ingest token |
+| `GET /hermes-overtime/*` | The plugin files, served by your own deployment for the Connect screen's curl lines |
 
 **Why a custom canvas renderer instead of Phaser or Pixi?** The office is one pre-rendered isometric room with a handful of sprites, glows and rain. A ~600-line renderer covers that, keeps the bundle around 260 KB and makes the single-file classic-script preview possible. Bundled game engines don't survive that preview's constraints.
 
@@ -195,6 +269,7 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 - **Secrets.** API keys and GitHub tokens are never stored by the Worker; the proxies forward them in flight only (`Authorization` for the LLM, `x-ot-gh-token` → `Authorization` for GitHub). Nothing logs request bodies or headers. Worker errors never echo request data.
 - **App CSP** (`public/_headers`): `default-src 'self'`, no inline scripts, `frame-ancestors 'none'`. It includes `'unsafe-eval'` for one reason: the Reviewer's JS syntax check *compiles* generated code with `new Function` and never calls it. Without eval, it falls back to a bracket/string/comment balance check.
 - **SSRF.** The proxy and the fetcher refuse loopback, private, link-local and metadata hosts. Local LLMs need the explicit `ALLOW_LOCAL_LLM=1` dev flag.
+- **External-agent offices.** Ingest and view tokens are random 24-byte values stored as SHA-256 hashes and compared in constant time; they open one office only. Hermes webhooks need a valid HMAC over the raw body and a fresh signed timestamp; repeated deliveries are dropped. Requests are capped at 256 KB and 200 events, offices are rate-limited, strings are clipped, secrets are redacted before storage, and the UI treats every payload as text (escaped). The Hermes plugin registers observer hooks only and cannot change what Hermes does; Overtime never answers approvals.
 
 ## Roadmap
 
@@ -204,7 +279,9 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 - Headless-browser checks (Lighthouse-style performance, real rendered contrast, screenshot diffs)
 - Agents that can ask each other questions, plus a "standup" summary at the meeting table
 - Day/night cycle, more office layouts, unlockable decor as runs complete
-- Shareable read-only run replays, with the event log stored in the Durable Object
+- Remote approvals for Hermes through its approval-transport API (the read-only `ApprovalTransport` seam is in place), streaming Hermes' replies into speech bubbles
+- Adapters for more agents on the generic events API (Claude Code hooks, OpenAI Agents SDK tracing)
+- Shareable read-only replays of built-in team runs (external-agent offices already have them)
 
 ## License
 

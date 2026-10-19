@@ -15,7 +15,7 @@ test("preview.html runs the demo offline in a sandboxed iframe", async ({ page }
   const network: string[] = [];
   await page.route("http://preview.test/**", (route) => {
     const u = new URL(route.request().url());
-    if (u.pathname === "/") return route.fulfill({ contentType: "text/html", body: `<!doctype html><body style="margin:0"><iframe id="f" sandbox="allow-scripts" src="/preview.html?speed=0.2" style="width:1440px;height:900px;border:0"></iframe></body>` });
+    if (u.pathname === "/") return route.fulfill({ contentType: "text/html", body: `<!doctype html><body style="margin:0"><iframe id="f" sandbox="allow-scripts" src="/preview.html?speed=0.2&target=kopi-senja" style="width:1440px;height:900px;border:0"></iframe></body>` });
     if (u.pathname === "/preview.html") return route.fulfill({ contentType: "text/html", body: html });
     network.push(u.pathname);
     return route.fulfill({ status: 404, body: "" });
@@ -68,6 +68,34 @@ test("preview.html runs the PR demo offline (mocked GitHub in memory)", async ({
   await expect(f.locator("#result")).toContainText("Pull request #8 is open", { timeout: 60_000 });
   await f.locator('#result [data-r="changes"]').click();
   await expect(f.locator("#files [data-diff-view] .ln.add")).toHaveText(["  return item.price * (item.qty ?? 1);"]);
+  expect(network).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("preview.html opens on the recorded Hermes session and plays it offline", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 0) < 600, "desktop only");
+  test.skip(!existsSync("preview.html"), "run npm run build:preview first");
+  const html = readFileSync("preview.html", "utf8");
+  const errors: string[] = [];
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  page.on("pageerror", (e) => errors.push(String(e)));
+  const network: string[] = [];
+  await page.route("http://preview.test/**", (route) => {
+    const u = new URL(route.request().url());
+    if (u.pathname === "/") return route.fulfill({ contentType: "text/html", body: `<!doctype html><body style="margin:0"><iframe id="f" sandbox="allow-scripts" src="/preview.html?speed=0.15" style="width:1440px;height:900px;border:0"></iframe></body>` });
+    if (u.pathname === "/preview.html") return route.fulfill({ contentType: "text/html", body: html });
+    network.push(u.pathname);
+    return route.fulfill({ status: 404, body: "" });
+  });
+  await page.goto("http://preview.test/");
+  const f = page.frameLocator("#f");
+  await expect(f.locator("#task-kind")).toHaveValue("demo-hermes");
+  await f.locator('#hermes-box [data-hx="play"]').click();
+  await expect(f.locator(".actor.is-borrowed .tag")).toHaveText("Check FastAPI docs", { timeout: 30_000 });
+  await expect(f.locator("#approval")).toContainText("Hermes is waiting for approval", { timeout: 60_000 });
+  await expect(f.locator("#approval [data-act]")).toHaveCount(0);
+  await expect(f.locator("#log")).toContainText("Turn finished", { timeout: 60_000 });
+  await expect(f.locator("#steps .step.done")).toHaveCount(5);
   expect(network).toEqual([]);
   expect(errors).toEqual([]);
 });

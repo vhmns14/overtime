@@ -14,7 +14,8 @@ import { DEMO_TASK, DEMO_PRICING, type DemoId } from "../demo/demo-llm";
 import { DEMO_REPO, DEMO_REPO_BRANCH, DEMO_REPO_TASK } from "../demo/demo-repo";
 import { Office, portraitURL } from "../office/scene";
 import { wordmarkSVG } from "../ui/wordmark";
-import { buildGitHub, buildLLM, llmSettings, loadSettings, saveSettings, secrets, type Settings } from "./settings";
+import { buildGitHub, buildLLM, llmSettings, loadSettings, saveSettings, secrets, type Settings, type Surface } from "./settings";
+import { HermesController } from "./hermes";
 import { deployToWorker, fetchRef, inlinePreview, esc } from "./deploy";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
@@ -38,7 +39,7 @@ interface HistoryItem {
 }
 interface ChangeView { path: string; status: "added" | "modified" | "deleted"; added: number; removed: number; diff: string }
 const HISTORY_KEY = "overtime:history:v1";
-const OVERLAYS = ["files", "settings", "history", "github"] as const;
+const OVERLAYS = ["files", "settings", "history", "github", "hermes"] as const;
 type Overlay = (typeof OVERLAYS)[number];
 
 function runTitle(task: string) {
@@ -72,12 +73,30 @@ export class App {
   private gh = { step: "token" as "token" | "repos", login: "", repos: [] as RepoInfo[], branches: [] as BranchInfo[], repo: "", branch: "", filter: "", error: "", busy: false };
   private lastThought = {} as Record<Role, string>;
   private speed: number;
+  private hermes!: HermesController;
+  /** /watch/<office>#v=<view token>: a read-only viewer of someone's Hermes office */
+  private watch: { id: string; token: string } | null = null;
 
   constructor(private bg: HTMLImageElement, private atlas: HTMLImageElement) {
     this.s = loadSettings();
     const q = new URLSearchParams(location.search);
     this.speed = Number(q.get("speed")) > 0 ? Number(q.get("speed")) : this.s.demoSpeed;
+    const w = location.pathname.match(/^\/watch\/(of-[a-z0-9]{8,24})\/?$/);
+    const v = new URLSearchParams(location.hash.slice(1)).get("v");
+    if (w && v) this.watch = { id: w[1], token: v };
+    const target = q.get("target");
+    if (target) this.applyTarget(target);
   }
+
+  /** One select drives everything: Hermes, the Hermes demo, the team demos, or the live team. */
+  private applyTarget(v: string) {
+    if (v === "hermes" || v === "demo-hermes") this.s.surface = v;
+    else if (v === "kopi-senja" || v === "repo-fix") Object.assign(this.s, { surface: "team" as Surface, mode: "demo", demo: v as DemoId });
+    else if (v === "site" || v === "repo") Object.assign(this.s, { surface: "team" as Surface, mode: "live", taskKind: v as TaskMode });
+    saveSettings(this.s);
+  }
+
+  private get onHermes() { return !!this.watch || this.s.surface !== "team"; }
 
   mount() {
     for (const el of document.querySelectorAll<HTMLElement>(".mark")) el.innerHTML = wordmarkSVG();
@@ -98,12 +117,51 @@ export class App {
     for (const b of document.querySelectorAll<HTMLElement>("[data-open]")) b.addEventListener("click", () => this.open(b.dataset.open as Overlay));
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      for (const id of ["files", "settings", "history", "github"]) if (!$(`#${id}`).hidden) { this.close(id); return; }
+      for (const id of OVERLAYS) if (!$(`#${id}`).hidden) { this.close(id); return; }
       if (!$("#agent-card").hidden) this.selectAgent(null);
     });
+    this.hermes = new HermesController({
+      office: this.office,
+      speed: () => this.speed,
+      renderSteps: (st) => this.renderSteps(st),
+      renderLog: (log, at, empty) => this.renderLog(log, at, empty),
+      renderCost: (usd, tok, by, opts) => this.renderCost(usd, tok, by, opts),
+      setTitle: (t) => { $("#run-title").textContent = t; },
+      setChip: (html, status) => { $("#mode-chip").innerHTML = html; $("#mode-chip").dataset.status = status; },
+      refreshAgentCard: () => { if (this.selected) this.renderAgentCard(); },
+      toast: (m) => this.toast(m),
+      openOverlay: (id) => this.open(id),
+      closeOverlay: (id) => this.close(id),
+    });
+    document.addEventListener("overtime:surface", (e) => { this.applyTarget(String((e as CustomEvent).detail)); this.enterSurface(); });
     this.renderSteps(Object.fromEntries(STEPS.map((s) => [s.id, { state: "pending" }])) as Record<StepId, { state: StepState; pct?: number }>);
     this.renderLog([]);
     this.renderCost(0, 0, null);
+    this.enterSurface();
+  }
+
+  /** (Re)enters the current surface: Hermes office, Hermes demo, read-only viewer, or the team. */
+  private enterSurface() {
+    if (this.orch && ["running", "waiting", "paused"].includes(this.orch.status)) this.orch.cancel();
+    $("#app").classList.toggle("is-hermes", this.onHermes);
+    $("#app").classList.toggle("is-watch", !!this.watch);
+    if (this.onHermes) {
+      this.orch = null;
+      $("#result").hidden = true;
+      this.hideGate();
+      this.hermes.enter(this.watch ? "watch" : this.s.surface === "demo-hermes" ? "demo-hermes" : "hermes", this.watch ?? undefined);
+    } else {
+      this.hermes.leave();
+      this.office.reset();
+      $("#approval").hidden = true;
+      delete $("#approval").dataset.ext;
+      const t = $<HTMLTextAreaElement>("#task");
+      t.value = this.defaultTask();
+      $("#run-title").textContent = runTitle(t.value || "New task");
+      this.renderSteps(Object.fromEntries(STEPS.map((x) => [x.id, { state: "pending" }])) as Record<StepId, { state: StepState; pct?: number }>);
+      this.renderLog([]);
+      this.renderCost(0, 0, null);
+    }
     this.renderChrome();
   }
 
@@ -118,10 +176,14 @@ export class App {
   }
 
   private onKindChange(v: string) {
+    if (v === "hermes" || v === "demo-hermes" || this.onHermes) {
+      this.applyTarget(v);
+      this.enterSurface();
+      if (v === "repo" && this.s.mode === "live" && (!this.s.ghRepo || !secrets.ghToken(this.s))) this.open("github");
+      return;
+    }
     const prevDefault = this.defaultTask();
-    if (this.s.mode === "demo") this.s.demo = (v === "repo-fix" ? "repo-fix" : "kopi-senja") as DemoId;
-    else this.s.taskKind = v === "repo" ? "repo" : "site";
-    saveSettings(this.s);
+    this.applyTarget(v);
     const t = $<HTMLTextAreaElement>("#task");
     if (this.s.mode === "demo" || !t.value.trim() || t.value === prevDefault) t.value = this.defaultTask();
     t.placeholder = this.currentKind() === "repo" ? "Describe the change, e.g. “Fix the off-by-one in pagination and add a test”" : "Describe a small website, e.g. “A landing page for my coffee shop”";
@@ -133,17 +195,22 @@ export class App {
 
   private renderTarget(active: boolean) {
     const sel = $<HTMLSelectElement>("#task-kind");
-    const opts = this.s.mode === "demo"
-      ? [["kopi-senja", "Demo · Build a landing page"], ["repo-fix", "Demo · Fix a bug in a repo → PR"]]
-      : [["site", "New static site"], ["repo", "GitHub repo → pull request"]];
-    const cur = this.s.mode === "demo" ? this.s.demo : this.s.taskKind;
+    const opts = [
+      ["hermes", "Hermes · watch my agent"],
+      ["demo-hermes", "Demo · a recorded Hermes session"],
+      ["kopi-senja", "Demo · team builds a landing page"],
+      ["repo-fix", "Demo · team fixes a bug → PR"],
+      ["site", "Team · new static site (your key)"],
+      ["repo", "Team · GitHub repo → PR (your key)"],
+    ];
+    const cur = this.onHermes ? this.s.surface : this.s.mode === "demo" ? this.s.demo : this.s.taskKind;
     const html = opts.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${l}</option>`).join("");
     if (sel.innerHTML !== html) sel.innerHTML = html;
     sel.value = cur;
     sel.disabled = active;
     const btn = $<HTMLButtonElement>("#repo-btn");
     const kind = this.currentKind();
-    btn.hidden = kind !== "repo";
+    btn.hidden = kind !== "repo" || this.onHermes;
     btn.disabled = active || this.s.mode === "demo";
     if (this.s.mode === "demo") { btn.textContent = `${DEMO_REPO} @ ${DEMO_REPO_BRANCH} · demo`; btn.dataset.state = "ready"; }
     else if (this.s.ghRepo && secrets.ghToken(this.s)) { btn.textContent = `${this.s.ghRepo} @ ${this.s.ghBranch}`; btn.dataset.state = "ready"; btn.title = "Change repository"; }
@@ -152,6 +219,7 @@ export class App {
 
   // ---------- run lifecycle ----------
   private async start() {
+    if (this.onHermes) { if (this.s.surface === "demo-hermes" && !this.watch) this.hermes.playDemo(); return; }
     if (this.orch && ["running", "waiting", "paused"].includes(this.orch.status)) return;
     const demo = this.s.mode === "demo";
     const kind = this.currentKind();
@@ -258,6 +326,16 @@ export class App {
   }
 
   private renderChrome() {
+    const hx = this.onHermes;
+    $("#hermes-box").hidden = !hx;
+    for (const el of [$("#task"), $("#task-form > .task-row")]) el.hidden = hx;
+    $("#task-target").hidden = !!this.watch;
+    if (hx) {
+      $("#notes-wrap").hidden = true;
+      this.renderTarget(false);
+      this.hermes.render();
+      return;
+    }
     const st = this.orch?.status ?? "idle";
     const active = ["running", "waiting", "paused"].includes(st);
     $("#app").classList.toggle("is-running", active);
@@ -279,14 +357,15 @@ export class App {
   }
 
   // ---------- panel pieces ----------
-  private renderSteps(steps: Record<StepId, { state: StepState; pct?: number }>) {
+  private renderSteps(steps: Record<StepId, { state: StepState; pct?: number; note?: string }>) {
     const v = $("#steps"), h = $("#steps-h");
-    const repo = (this.orch ? this.runKind : this.currentKind()) === "repo";
-    const lbl = (id: StepId, label: string) => (repo && id === "deploy" ? "Open PR" : repo && id === "code" ? "Patch" : label);
+    const repo = !this.onHermes && (this.orch ? this.runKind : this.currentKind()) === "repo";
+    const hx = this.onHermes;
+    const lbl = (id: StepId, label: string) => (repo && id === "deploy" ? "Open PR" : repo && id === "code" ? "Patch" : hx && id === "review" ? "Verify" : hx && id === "deploy" ? "Ship" : label);
     v.innerHTML = STEPS.map(({ id, label: l0 }) => {
       const label = lbl(id, l0);
       const s = steps[id];
-      const stateText = s.state === "done" ? "✓" : s.state === "active" ? (id === "code" && s.pct !== undefined ? `${s.pct}%` : "working") : s.state;
+      const stateText = s.note && s.state !== "pending" ? `${s.state === "done" ? "✓ " : ""}<small class="note">${esc(s.note)}</small>` : s.state === "done" ? "✓" : s.state === "active" ? (id === "code" && s.pct !== undefined ? `${s.pct}%` : "working") : s.state;
       const bar = id === "code" && (s.state === "active" || (s.state === "done" && false)) ? `<span class="bar"><i style="width:${s.pct ?? 0}%"></i></span>` : "";
       return `<li class="step ${s.state}" data-step="${id}"><span class="dot"></span><span class="label">${label}</span><span class="state">${stateText}</span>${bar}</li>`;
     }).join("");
@@ -298,8 +377,9 @@ export class App {
     }).join("");
   }
 
-  private renderLog(log: LogEntry[]) {
+  private renderLog(log: LogEntry[], startedAt = this.startedAt, emptyHtml?: string) {
     const el = $("#log");
+    if (!log.length && emptyHtml) { el.innerHTML = `<li class="empty">${emptyHtml}</li>`; return; }
     if (!log.length) {
       const kind = this.currentKind();
       el.innerHTML = `<li class="empty">${this.s.mode === "demo"
@@ -310,15 +390,26 @@ export class App {
       return;
     }
     const rows = log.slice(-200).reverse().map((e) => {
-      const sec = Math.max(0, Math.floor((e.t - this.startedAt) / 1000));
+      const sec = Math.max(0, Math.floor((e.t - startedAt) / 1000));
       const el = `[${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}]`;
-      const who = e.agent === "system" ? "" : `<b>${ROLE_INFO[e.agent].name}</b> `;
-      return `<li class="${e.level ?? "info"}"><time>${el}</time><span>${who}${esc(e.text)}</span></li>`;
+      const who = e.agent === "system" ? "" : `<b>${esc(e.name ?? ROLE_INFO[e.agent].name)}</b> `;
+      const stamp = sec >= 3600 ? `[${Math.floor(sec / 3600)}h${String(Math.floor((sec % 3600) / 60)).padStart(2, "0")}]` : el;
+      return `<li class="${e.level ?? "info"}"><time>${stamp}</time><span>${who}${esc(e.text)}</span></li>`;
     });
     el.innerHTML = rows.join("");
   }
 
-  private renderCost(usd: number, tokens: number, by: Record<Role, { tokens: number; usd: number }> | null) {
+  private renderCost(usd: number, tokens: number, by: Record<Role, { tokens: number; usd: number }> | null, opts?: { meta?: string; names?: Partial<Record<Role, string>>; note?: string }) {
+    if (opts) {
+      $("#cost-usd").textContent = usd > 0 && usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
+      $<HTMLElement>("#cost-fill").style.width = `${Math.min(100, usd * 100)}%`;
+      $("#cost-meta").textContent = opts.meta ?? "";
+      $("#cost").classList.remove("over");
+      $("#cost-break").innerHTML = (by
+        ? ROLES.filter((r) => by[r].tokens > 0).map((r) => `<span><span>${esc(opts.names?.[r] ?? ROLE_INFO[r].name)}</span><span>${by[r].tokens.toLocaleString("en-US")} tok · $${by[r].usd.toFixed(4)}</span></span>`).join("") || `<span>No spend yet.</span>`
+        : `<span>No spend yet.</span>`) + (opts.note ? `<span><span>${esc(opts.note)}</span></span>` : "");
+      return;
+    }
     const cap = this.s.budgetUsd;
     $("#cost-usd").textContent = `$${usd.toFixed(2)}`;
     $<HTMLElement>("#cost-fill").style.width = `${Math.min(100, (usd / cap) * 100)}%`;
@@ -414,18 +505,21 @@ export class App {
     const el = $("#agent-card");
     const r = this.selected;
     if (!r) { el.hidden = true; return; }
-    const st = this.orch?.agents[r];
+    const hs = this.onHermes ? this.hermes.session : null;
+    const st = hs ? hs.agents[r] : this.orch?.agents[r];
     const activity = st ? { idle: "idle", working: "working", meeting: "in a handoff", whiteboard: "at the whiteboard", coffee: "on a coffee break", waiting: "waiting for your approval" }[st.activity] : "idle";
     const log = st?.log.slice(-6).reverse() ?? [];
     const files = st?.filesTouched ?? [];
-    el.innerHTML = `<header><img alt="" src="${this.portraits[r]}"><div><h3>${ROLE_INFO[r].name}</h3><div class="sub">${ROLE_INFO[r].title} · ${activity}</div></div><button class="link-btn x" aria-label="Close">Close</button></header>
-      <p class="thought">${st?.thought ? esc(st.thought) : "No thoughts yet. Start a run."}</p>
+    const name = hs ? hs.agents[r].name : ROLE_INFO[r].name;
+    const sub = hs && name !== ROLE_INFO[r].name ? `Hermes subagent at the ${ROLE_INFO[r].name} desk` : ROLE_INFO[r].title;
+    el.innerHTML = `<header><img alt="" src="${this.portraits[r]}"><div><h3>${esc(name)}</h3><div class="sub">${esc(sub)} · ${activity}</div></div><button class="link-btn x" aria-label="Close">Close</button></header>
+      <p class="thought">${st?.thought ? esc(st.thought) : this.onHermes ? "Nothing yet. This desk lights up when Hermes does this kind of work." : "No thoughts yet. Start a run."}</p>
       <h4>Recent log</h4><ul>${log.length ? log.map((l) => `<li>${esc(l)}</li>`).join("") : "<li>—</li>"}</ul>
       <h4>Files touched</h4><ul class="files">${files.length ? files.map((f) => `<li data-f="${esc(f)}">${esc(f)}</li>`).join("") : "<li>—</li>"}</ul>
       <h4>Spend</h4><ul><li>${(st?.tokens ?? 0).toLocaleString("en-US")} tokens · $${(st?.cost ?? 0).toFixed(3)}</li></ul>`;
     el.hidden = false;
     el.querySelector(".x")!.addEventListener("click", () => this.selectAgent(null));
-    el.querySelectorAll<HTMLElement>("[data-f]").forEach((li) => li.addEventListener("click", () => { this.filesState = { ...this.filesState, tab: "files", path: li.dataset.f!, version: -1 }; this.open("files"); }));
+    if (!hs) el.querySelectorAll<HTMLElement>("[data-f]").forEach((li) => li.addEventListener("click", () => { this.filesState = { ...this.filesState, tab: "files", path: li.dataset.f!, version: -1 }; this.open("files"); }));
   }
 
   // ---------- overlays ----------
@@ -435,6 +529,7 @@ export class App {
     if (which === "settings") this.renderSettings();
     if (which === "history") this.renderHistory();
     if (which === "github") this.renderGitHub();
+    if (which === "hermes") this.hermes.renderSetup();
     const el = $(`#${which}`);
     el.hidden = false;
     el.querySelector<HTMLElement>("button, input, select")?.focus();

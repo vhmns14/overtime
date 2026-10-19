@@ -64,9 +64,9 @@ test("connect GitHub with a PAT (mocked API): bad token → clear error, good to
     await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: await res.text() });
   });
   await page.addInitScript(() => {
-    if (!localStorage.getItem("overtime:settings:v1")) localStorage.setItem("overtime:settings:v1", JSON.stringify({ mode: "live", taskKind: "repo" }));
+    if (!localStorage.getItem("overtime:settings:v1")) localStorage.setItem("overtime:settings:v1", JSON.stringify({ surface: "team", mode: "live", taskKind: "repo" }));
   });
-  await openApp(page);
+  await openApp(page, 0.2, null);
   await expect(page.locator("#task-kind")).toHaveValue("repo");
   await expect(page.locator("#repo-btn")).toHaveText("Connect GitHub…");
   await page.locator("#repo-btn").click();

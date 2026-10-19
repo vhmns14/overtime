@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Overtime: watch a team of AI agents build a website or fix your repo in a pixel-art office, approve the steps that matter, get a live preview or a pull request.",
+  "description": "Overtime: watch your own Hermes agent work live in a pixel-art office (tool calls, subagents, approvals, cost), or give a task to a built-in team of AI agents that builds a site or opens a pull request.",
   "license": "MIT",
   "author": "vhmns \u00b7 Kode Kecil",
   "scripts": {
@@ -15,6 +15,8 @@
     "atlas": "python3 scripts/build-atlas.py",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:plugin": "cd integrations/hermes-overtime && uv run --no-project --with pytest python -m pytest -q tests",
+    "gen:schema": "vite-node scripts/gen-events-schema.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p worker/tsconfig.json",
     "deploy": "npm run build && wrangler deploy",
     "live:smoke": "vite-node scripts/live-smoke.ts"

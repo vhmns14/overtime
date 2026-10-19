@@ -1,5 +1,6 @@
 # Overtime: one Worker serves the app (Workers Static Assets), the BYO-key LLM proxy,
-# the Research page fetcher, and run previews at /p/<runId>/ (SQLite Durable Object per run).
+# the Research page fetcher, run previews at /p/<runId>/ (SQLite Durable Object per run), and
+# external-agent offices for Hermes at /api/ext/* (SQLite Durable Object per office).
 name = "overtime"
 main = "worker/src/index.ts"
 compatibility_date = "2025-09-01"
@@ -15,12 +16,22 @@ run_worker_first = ["/api/*", "/p/*"]
 name = "PREVIEWS"
 class_name = "PreviewStore"
 
+[[durable_objects.bindings]]
+name = "EXT_OFFICES"
+class_name = "ExtOffice"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["PreviewStore"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ExtOffice"]
+
 [vars]
 PREVIEW_TTL_DAYS = "7"
+# external-agent offices (Hermes) are deleted after this many days without events
+EXT_TTL_DAYS = "30"
 # "1" only for local development: lets the proxy reach a local Ollama at http://localhost:11434
 ALLOW_LOCAL_LLM = "0"
 # For local Ollama put ALLOW_LOCAL_LLM=1 in .dev.vars (never committed).

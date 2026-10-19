@@ -295,6 +295,14 @@ export class Office {
 
   setTickets(tickets: Ticket[]) { this.tickets = tickets; }
 
+  /** Name tag over a character (an external agent's subagent borrows a desk); null restores the role name. */
+  setTag(role: Role, text: string | null) {
+    const a = this.actors[role];
+    a.tag.textContent = text ?? ROLE_INFO[role].name;
+    a.el.setAttribute("aria-label", `${text ?? ROLE_INFO[role].name}: open details`);
+    a.el.classList.toggle("is-borrowed", !!text);
+  }
+
   /** An orange sticky with the PR number on the whiteboard. */
   setPrNote(text: string | null) { this.prNote = text; }
 
@@ -315,6 +323,7 @@ export class Office {
   }
 
   reset() {
+    for (const r of ROLES) this.setTag(r, null);
     this.tickets = [];
     this.prNote = null;
     this.celebrateUntil = {};

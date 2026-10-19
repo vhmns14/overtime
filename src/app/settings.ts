@@ -5,7 +5,11 @@ import { DemoLLM, type DemoId } from "../demo/demo-llm";
 import { GitHubClient, PatAuth, type AuthProvider } from "../engine/github";
 import { DEMO_GH_TOKEN, demoGitHub } from "../demo/demo-repo";
 
+export type Surface = "hermes" | "demo-hermes" | "team";
+
 export interface Settings {
+  /** what the office shows: your Hermes agent (default), the recorded Hermes demo, or the built-in team */
+  surface: Surface;
   mode: "demo" | "live";
   preset: string;
   baseUrl: string;
@@ -38,6 +42,7 @@ const SECRET_GH = "overtime:gh-token";
 export function defaults(): Settings {
   const p = PRESETS[0];
   return {
+    surface: __PREVIEW__ ? "demo-hermes" : "hermes",
     mode: "demo", preset: p.id, baseUrl: p.baseUrl, model: p.model, route: p.route, jsonMode: true, output: "auto", stream: false, rememberKey: false,
     priceIn: p.pricing.input, priceOut: p.pricing.output, budgetUsd: 0.5, gates: { plan: true, review: true, deploy: true },
     demoSpeed: 1, demo: "kopi-senja", taskKind: "site", ghRepo: "", ghBranch: "", ghLogin: "", ghRemember: false, ghRoute: "proxy",

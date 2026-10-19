@@ -13,3 +13,8 @@ declare module "node:os" {
   export function tmpdir(): string;
 }
 declare const process: { env: Record<string, string | undefined>; exitCode?: number };
+declare module "node:crypto" {
+  interface Hmac { update(d: string | Uint8Array): Hmac; digest(enc: "hex"): string }
+  export function createHmac(alg: string, key: string | Uint8Array): Hmac;
+}
+declare const Buffer: { from(s: string, enc?: "utf8"): Uint8Array };

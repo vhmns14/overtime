@@ -1,6 +1,7 @@
 // Overtime Worker: serves the app (Workers Static Assets), a stateless LLM proxy that forwards the
 // user's own key without storing or logging it, a read-only page fetcher for Research, and preview
-// hosting at /p/<runId>/ backed by one SQLite Durable Object per run.
+// hosting at /p/<runId>/ backed by one SQLite Durable Object per run, and external-agent offices
+// (Hermes first) at /api/ext/* backed by one SQLite Durable Object per office (worker/src/ext.ts).
 
 export interface Env {
   ASSETS: Fetcher;
@@ -8,9 +9,13 @@ export interface Env {
   /** "1" lets the proxy reach http://localhost (wrangler dev only) */
   ALLOW_LOCAL_LLM?: string;
   PREVIEW_TTL_DAYS?: string;
+  EXT_OFFICES: DurableObjectNamespace;
+  EXT_TTL_DAYS?: string;
 }
 
 import { DurableObject } from "cloudflare:workers";
+import { handleExt } from "./ext";
+export { ExtOffice } from "./ext";
 import { RUN_ID, MAX_FILES, MAX_TOTAL, PREVIEW_CSP, TYPES, safePath, isPrivateHost, json, CORS, htmlToText, ghRouteAllowed, ghBodyAllowed } from "./lib";
 
 async function proxyLLM(req: Request, env: Env): Promise<Response> {
@@ -106,9 +111,10 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname;
-    if (req.method === "OPTIONS" && path.startsWith("/api/")) return new Response(null, { status: 204, headers: CORS });
+    if (req.method === "OPTIONS" && path.startsWith("/api/") && !path.startsWith("/api/ext/")) return new Response(null, { status: 204, headers: CORS });
     try {
-      if (path === "/api/health") return json({ ok: true, service: "overtime", previews: true });
+      if (path === "/api/health") return json({ ok: true, service: "overtime", previews: true, ext: true });
+      if (path.startsWith("/api/ext/")) return (await handleExt(req, env, url))!;
       if (path === "/api/llm" && req.method === "POST") return await proxyLLM(req, env);
       if (path.startsWith("/api/gh/")) return await proxyGitHub(req, url);
       if (path === "/api/fetch" && req.method === "GET") return await fetchPage(url.searchParams.get("url") ?? "");

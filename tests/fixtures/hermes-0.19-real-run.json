@@ -1,0 +1,400 @@
+[
+ {
+  "v": 1,
+  "type": "session.start",
+  "ts": 1792400908129,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "model": "openai/gpt-4o-mini",
+   "platform": "cli",
+   "profile": "default"
+  },
+  "seq": 1
+ },
+ {
+  "v": 1,
+  "type": "agent.thinking",
+  "ts": 1792400908148,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "text": "Calling openai/gpt-4o-mini (step 1)"
+  },
+  "seq": 2
+ },
+ {
+  "v": 1,
+  "type": "llm.call",
+  "ts": 1792400910332,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "model": "openai/gpt-4o-mini",
+   "provider": "openrouter",
+   "input_tokens": 4539,
+   "output_tokens": 72,
+   "cache_read_tokens": 0,
+   "cache_write_tokens": 0,
+   "reasoning_tokens": 0,
+   "cost_usd": 0.000362025,
+   "duration_ms": 2176,
+   "finish_reason": "tool_calls",
+   "tool_calls": 1
+  },
+  "seq": 3
+ },
+ {
+  "v": 1,
+  "type": "tool.start",
+  "ts": 1792400910332,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "todo",
+   "call_id": "call_idaCwlUIMNhWUwusUWpLOD50",
+   "args_summary": "todos=[{\"id\": \"1\", \"content\": \"Create a short todo plan\", \"status\u2026"
+  },
+  "seq": 4
+ },
+ {
+  "v": 1,
+  "type": "tool.end",
+  "ts": 1792400910373,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "todo",
+   "call_id": "call_idaCwlUIMNhWUwusUWpLOD50",
+   "ok": true,
+   "status": "ok",
+   "duration_ms": 0
+  },
+  "seq": 5
+ },
+ {
+  "v": 1,
+  "type": "agent.thinking",
+  "ts": 1792400910379,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "text": "Calling openai/gpt-4o-mini (step 2)"
+  },
+  "seq": 6
+ },
+ {
+  "v": 1,
+  "type": "llm.call",
+  "ts": 1792400912403,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "model": "openai/gpt-4o-mini",
+   "provider": "openrouter",
+   "input_tokens": 253,
+   "output_tokens": 110,
+   "cache_read_tokens": 4480,
+   "cache_write_tokens": 0,
+   "reasoning_tokens": 0,
+   "cost_usd": 0.000219975,
+   "duration_ms": 2018,
+   "finish_reason": "tool_calls",
+   "tool_calls": 3
+  },
+  "seq": 7
+ },
+ {
+  "v": 1,
+  "type": "tool.start",
+  "ts": 1792400912403,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "write_file",
+   "call_id": "call_1jE9BP3y1PsDVZOpq7QDMXNV",
+   "args_summary": "path=/home/user/demo/hello.py",
+   "target": "/home/user/demo/hello.py"
+  },
+  "seq": 8
+ },
+ {
+  "v": 1,
+  "type": "tool.start",
+  "ts": 1792400912403,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "terminal",
+   "call_id": "call_3BRjljEbcwtrEEajFPRBcCAO",
+   "args_summary": "python3 /home/user/demo/hello.py",
+   "target": "python3"
+  },
+  "seq": 9
+ },
+ {
+  "v": 1,
+  "type": "tool.start",
+  "ts": 1792400912403,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "terminal",
+   "call_id": "call_lPagqrMggBBsaUHzio2QIBrG",
+   "args_summary": "python3 -m pytest --version",
+   "target": "python3 -m pytest"
+  },
+  "seq": 10
+ },
+ {
+  "v": 1,
+  "type": "tool.end",
+  "ts": 1792400912534,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "write_file",
+   "call_id": "call_1jE9BP3y1PsDVZOpq7QDMXNV",
+   "ok": true,
+   "status": "ok",
+   "duration_ms": 108,
+   "target": "/home/user/demo/hello.py"
+  },
+  "seq": 11
+ },
+ {
+  "v": 1,
+  "type": "file.write",
+  "ts": 1792400912534,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "path": "/home/user/demo/hello.py",
+   "op": "write"
+  },
+  "seq": 12
+ },
+ {
+  "v": 1,
+  "type": "tool.end",
+  "ts": 1792400913562,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "terminal",
+   "call_id": "call_3BRjljEbcwtrEEajFPRBcCAO",
+   "ok": true,
+   "status": "ok",
+   "duration_ms": 17,
+   "target": "python3"
+  },
+  "seq": 13
+ },
+ {
+  "v": 1,
+  "type": "tool.end",
+  "ts": 1792400914598,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "terminal",
+   "call_id": "call_lPagqrMggBBsaUHzio2QIBrG",
+   "ok": true,
+   "status": "ok",
+   "duration_ms": 31,
+   "target": "python3 -m pytest"
+  },
+  "seq": 14
+ },
+ {
+  "v": 1,
+  "type": "agent.thinking",
+  "ts": 1792400914606,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "text": "Calling openai/gpt-4o-mini (step 3)"
+  },
+  "seq": 15
+ },
+ {
+  "v": 1,
+  "type": "llm.call",
+  "ts": 1792400915595,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "model": "openai/gpt-4o-mini",
+   "provider": "openrouter",
+   "input_tokens": 259,
+   "output_tokens": 16,
+   "cache_read_tokens": 4736,
+   "cache_write_tokens": 0,
+   "reasoning_tokens": 0,
+   "cost_usd": 0.000201825,
+   "duration_ms": 985,
+   "finish_reason": "tool_calls",
+   "tool_calls": 1
+  },
+  "seq": 16
+ },
+ {
+  "v": 1,
+  "type": "tool.start",
+  "ts": 1792400915595,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "terminal",
+   "call_id": "call_2d617En9nr8d3vSnnNMV8rYj",
+   "args_summary": "pip install pytest",
+   "target": "pip install"
+  },
+  "seq": 17
+ },
+ {
+  "v": 1,
+  "type": "tool.end",
+  "ts": 1792400917386,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "terminal",
+   "call_id": "call_2d617En9nr8d3vSnnNMV8rYj",
+   "ok": true,
+   "status": "ok",
+   "duration_ms": 1786,
+   "target": "pip install"
+  },
+  "seq": 18
+ },
+ {
+  "v": 1,
+  "type": "agent.thinking",
+  "ts": 1792400917393,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "text": "Calling openai/gpt-4o-mini (step 4)"
+  },
+  "seq": 19
+ },
+ {
+  "v": 1,
+  "type": "llm.call",
+  "ts": 1792400918400,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "model": "openai/gpt-4o-mini",
+   "provider": "openrouter",
+   "input_tokens": 596,
+   "output_tokens": 20,
+   "cache_read_tokens": 4992,
+   "cache_write_tokens": 0,
+   "reasoning_tokens": 0,
+   "cost_usd": 0.0002379,
+   "duration_ms": 1002,
+   "finish_reason": "tool_calls",
+   "tool_calls": 1
+  },
+  "seq": 20
+ },
+ {
+  "v": 1,
+  "type": "tool.start",
+  "ts": 1792400918400,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "terminal",
+   "call_id": "call_l2LxAS853oYC5tZsqQRH5xP5",
+   "args_summary": "python3 -m pytest --version",
+   "target": "python3 -m pytest"
+  },
+  "seq": 21
+ },
+ {
+  "v": 1,
+  "type": "tool.end",
+  "ts": 1792400918681,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "name": "terminal",
+   "call_id": "call_l2LxAS853oYC5tZsqQRH5xP5",
+   "ok": true,
+   "status": "ok",
+   "duration_ms": 177,
+   "target": "python3 -m pytest"
+  },
+  "seq": 22
+ },
+ {
+  "v": 1,
+  "type": "agent.thinking",
+  "ts": 1792400918687,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "text": "Calling openai/gpt-4o-mini (step 5)"
+  },
+  "seq": 23
+ },
+ {
+  "v": 1,
+  "type": "llm.call",
+  "ts": 1792400920555,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "model": "openai/gpt-4o-mini",
+   "provider": "openrouter",
+   "input_tokens": 135,
+   "output_tokens": 97,
+   "cache_read_tokens": 5504,
+   "cache_write_tokens": 0,
+   "reasoning_tokens": 0,
+   "cost_usd": 0.000245625,
+   "duration_ms": 1860,
+   "finish_reason": "stop",
+   "tool_calls": 0
+  },
+  "seq": 24
+ },
+ {
+  "v": 1,
+  "type": "agent.thinking",
+  "ts": 1792400920576,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "text": "Replied"
+  },
+  "seq": 25
+ },
+ {
+  "v": 1,
+  "type": "session.end",
+  "ts": 1792400920576,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "status": "completed"
+  },
+  "seq": 26
+ },
+ {
+  "v": 1,
+  "type": "session.end",
+  "ts": 1792400920577,
+  "session": "20261019_090826_7eba2a",
+  "agent": "main",
+  "data": {
+   "status": "completed",
+   "reason": "shutdown",
+   "final": true
+  },
+  "seq": 27
+ }
+]
