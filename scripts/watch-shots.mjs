@@ -1,11 +1,11 @@
 // Screenshots of a live office while a real Hermes runs: node scripts/watch-shots.mjs <office.json> <outPrefix> <w> <h> <ms,ms,...>
 import { chromium } from "@playwright/test";
 import { readFileSync } from "node:fs";
-process.env.PLAYWRIGHT_BROWSERS_PATH ??= "/workspace/work/.pw-browsers";
+if (process.env.PW_HOME) process.env.PLAYWRIGHT_BROWSERS_PATH ??= `${process.env.PW_HOME}/.pw-browsers`;
 const [officeFile, prefix, w, h, times, base = "http://127.0.0.1:8787"] = process.argv.slice(2);
 const o = JSON.parse(readFileSync(officeFile, "utf8"));
 const creds = { runId: o.runId, ingestToken: o.ingestToken, viewToken: o.viewToken, webhookSecret: o.webhookSecret, privacy: o.privacy, createdAt: Date.now(), origin: base };
-const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM ?? "/workspace/work/.pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell" });
+const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM ?? (process.env.PW_HOME ? `${process.env.PW_HOME}/.pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell` : undefined) });
 const mobile = +w < 600;
 const page = await browser.newPage({ viewport: { width: +w, height: +h }, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile });
 const errors = [];

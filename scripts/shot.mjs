@@ -1,10 +1,10 @@
 // Usage: node scripts/shot.mjs <url> <out.png> <width> <height> [waitMs] [actions]
 // actions: comma list of "click:<selector>", "wait:<ms>", "waitfor:<selector>"
 import { chromium } from "@playwright/test";
-process.env.PLAYWRIGHT_BROWSERS_PATH ??= "/workspace/work/.pw-browsers";
-process.env.LD_LIBRARY_PATH = ["/workspace/work/.pw-libs", process.env.LD_LIBRARY_PATH].filter(Boolean).join(":");
+if (process.env.PW_HOME) process.env.PLAYWRIGHT_BROWSERS_PATH ??= `${process.env.PW_HOME}/.pw-browsers`;
+process.env.LD_LIBRARY_PATH = [process.env.PW_HOME && `${process.env.PW_HOME}/.pw-libs`, process.env.LD_LIBRARY_PATH].filter(Boolean).join(":");
 const [url, out, w, h, waitMs = "1500", actions = ""] = process.argv.slice(2);
-const browser = await chromium.launch({ executablePath: "/workspace/work/.pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell" });
+const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM ?? (process.env.PW_HOME ? `${process.env.PW_HOME}/.pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell` : undefined) });
 const page = await browser.newPage({ viewport: { width: +w, height: +h }, deviceScaleFactor: 1, isMobile: +w < 600, hasTouch: +w < 600 });
 const errors = [];
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });

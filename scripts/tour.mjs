@@ -1,10 +1,10 @@
 // Full demo tour with screenshots at each key moment (README + mockup comparison).
 // Usage: node scripts/tour.mjs <baseUrl> <outDir> <width> <height>
 import { chromium } from "@playwright/test";
-process.env.LD_LIBRARY_PATH = ["/workspace/work/.pw-libs", process.env.LD_LIBRARY_PATH].filter(Boolean).join(":");
+process.env.LD_LIBRARY_PATH = [process.env.PW_HOME && `${process.env.PW_HOME}/.pw-libs`, process.env.LD_LIBRARY_PATH].filter(Boolean).join(":");
 const [base = "http://127.0.0.1:8787", out = "shots", w = "1440", h = "900"] = process.argv.slice(2);
 const mobile = +w < 600;
-const browser = await chromium.launch({ executablePath: "/workspace/work/.pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell" });
+const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM ?? (process.env.PW_HOME ? `${process.env.PW_HOME}/.pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell` : undefined) });
 const page = await browser.newPage({ viewport: { width: +w, height: +h }, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: mobile ? 2 : 1 });
 const errors = [];
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });

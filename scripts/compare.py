@@ -13,5 +13,6 @@ def pair(a, bs, out, h):
     d = ImageDraw.Draw(m)
     d.text((8, 10), 'MOCKUP', fill=(20, 18, 16)); d.text((A.width + 32, 10), 'APP (real screenshot)', fill=(20, 18, 16))
     m.save(out)
-pair('/workspace/overtime-desktop.png', sys.argv[1], 'docs/compare-desktop.png', 768)
-pair('/workspace/overtime-mobile.png', sys.argv[2:], 'docs/compare-mobile.png', 844)
+# Usage: python3 scripts/compare.py <mockup-desktop.png> <mockup-mobile.png> <app-desktop.png> <app-mobile.png>...
+pair(sys.argv[1], sys.argv[3], 'docs/compare-desktop.png', 768)
+pair(sys.argv[2], sys.argv[4:], 'docs/compare-mobile.png', 844)
