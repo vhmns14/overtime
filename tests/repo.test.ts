@@ -263,3 +263,59 @@ describe("context budget", () => {
     expect(m[5].content.length).toBeGreaterThan(5000);
   });
 });
+
+describe("fix rounds with weak models (from the real-provider smoke run)", () => {
+  it("contrast failures name the CSS file and suggest passing colours", async () => {
+    const { runChecks } = await import("../src/engine/checks");
+    const r = runChecks({ "index.html": '<!doctype html><html lang="en"><head><title>t</title><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="css/s.css"></head><body><header>Hi</header></body></html>', "css/s.css": "header { background-color: #4CAF50; color: white; }" });
+    const d = r.results.find((x) => x.id === "contrast")!.details[0];
+    expect(d).toMatch(/rule in css\/s\.css/);
+    expect(d).toMatch(/text #ffffff on #4caf50: e\.g\. background #[0-9a-f]{6} \([\d.]+:1\) or color #111111/);
+  });
+  it("the coder's turn ends as soon as the checks pass, and a stuck coder hands off at the step cap instead of failing the run", async () => {
+    const { DemoLLM } = await import("../src/demo/demo-llm");
+    const bad = '<!doctype html><html lang="en"><head><title>t</title><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="s.css"></head><body><h1>x</h1></body></html>';
+    let coderCalls = 0;
+    const llm: LLM = {
+      label: "stuck",
+      async complete(req) {
+        const demo = new DemoLLM({ speed: 0 });
+        if (req.agent === "coder") {
+          coderCalls++;
+          const fix = /FIX ROUND/.test(req.messages[1].content);
+          const css = fix ? "h1 { color: #111111; background-color: #ffffff; }" : "h1 { color: #777777; background-color: #888888; }";
+          if (!fix && coderCalls === 1) return { text: JSON.stringify({ thought: "", tool: "write_file", args: { path: "index.html", content: bad } }), usage: { prompt: 1, completion: 1 } };
+          if (!fix && coderCalls === 2) return { text: JSON.stringify({ thought: "", tool: "write_file", args: { path: "s.css", content: css } }), usage: { prompt: 1, completion: 1 } };
+          if (!fix) return { text: JSON.stringify({ thought: "", tool: "handoff", args: { to: "reviewer", summary: "done" } }), usage: { prompt: 1, completion: 1 } };
+          return { text: JSON.stringify({ thought: "", tool: "write_file", args: { path: "s.css", content: css } }), usage: { prompt: 1, completion: 1 } };
+        }
+        return demo.complete(req);
+      },
+    };
+    const o = new Orchestrator({ llm, runId: "fx", config: { ...DEFAULT_CONFIG, task: "x", budgetUsd: 5, gates: { plan: false, review: false, deploy: false } }, deploy: async () => ({ url: "", local: true }) });
+    expect(await o.run()).toBe("done");
+    expect(o.lastReport?.ok).toBe(true);
+    expect(o.log.some((l) => /all checks pass now; handing back to Reviewer/.test(l.text))).toBe(true);
+    expect(coderCalls).toBe(4); // 3 in round 0, exactly 1 in the fix round
+
+    // a coder that keeps writing the same failing file hits the soft cap and the run still completes
+    const stuck: LLM = {
+      label: "stuck2",
+      async complete(req) {
+        if (req.agent === "coder") {
+          const n = req.messages.filter((m) => m.role === "assistant").length;
+          if (!/FIX ROUND/.test(req.messages[1].content)) {
+            const seq = [{ path: "index.html", content: bad }, { path: "s.css", content: "h1 { color: #777777; background-color: #888888; }" }];
+            return { text: JSON.stringify(n < 2 ? { thought: "", tool: "write_file", args: seq[n] } : { thought: "", tool: "handoff", args: { to: "reviewer", summary: "d" } }), usage: { prompt: 1, completion: 1 } };
+          }
+          return { text: JSON.stringify({ thought: "", tool: "write_file", args: { path: "s.css", content: `h1 { color: #777777; background-color: #8${n % 10}8888; }` } }), usage: { prompt: 1, completion: 1 } };
+        }
+        return new DemoLLM({ speed: 0 }).complete(req);
+      },
+    };
+    const o2 = new Orchestrator({ llm: stuck, runId: "fx2", config: { ...DEFAULT_CONFIG, task: "x", budgetUsd: 5, maxStepsPerAgent: 4, gates: { plan: false, review: false, deploy: false } }, deploy: async () => ({ url: "", local: true }) });
+    expect(await o2.run()).toBe("done");
+    expect(o2.log.some((l) => /step limit reached/.test(l.text))).toBe(true);
+    expect(o2.summary).toMatch(/with failing checks/);
+  });
+});

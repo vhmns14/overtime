@@ -132,8 +132,23 @@ function firstColorToken(v: string, vars: Record<string, string>, depth = 0): [n
   return null;
 }
 
-function contrastIssues(cssTexts: string[]): string[] {
-  const rules = cssTexts.flatMap(readCss);
+const hex = (c: [number, number, number]) => "#" + c.map((x) => Math.round(Math.max(0, Math.min(255, x))).toString(16).padStart(2, "0")).join("");
+
+/** A concrete fix a model can apply: darker/lighter background for the same text colour, or black/white text. */
+function contrastHint(fg: [number, number, number], bg: [number, number, number]): string {
+  const lum = (c: [number, number, number]) => contrast(c, [0, 0, 0]);
+  const fgLight = lum(fg) > lum(bg);
+  let b: [number, number, number] = [...bg];
+  for (let i = 0; i < 40 && contrast(fg, b) < 4.6; i++) b = b.map((x) => (fgLight ? x * 0.9 : x + (255 - x) * 0.15)) as [number, number, number];
+  const textAlt: [number, number, number] = contrast([17, 17, 17], bg) >= contrast([255, 255, 255], bg) ? [17, 17, 17] : [255, 255, 255];
+  const parts = [];
+  if (contrast(fg, b) >= 4.5) parts.push(`e.g. background ${hex(b)} (${contrast(fg, b).toFixed(1)}:1)`);
+  if (contrast(textAlt, bg) >= 4.5) parts.push(`or color ${hex(textAlt)} (${contrast(textAlt, bg).toFixed(1)}:1)`);
+  return `text ${hex(fg)} on ${hex(bg)}${parts.length ? `: ${parts.join(" ")}` : ""}`;
+}
+
+function contrastIssues(cssTexts: { file: string; text: string }[]): string[] {
+  const rules = cssTexts.flatMap((c) => readCss(c.text).map((r) => ({ ...r, file: c.file })));
   const vars: Record<string, string> = {};
   for (const r of rules) for (const [k, v] of Object.entries(r.decls)) if (k.startsWith("--")) vars[k] = v;
   const issues: string[] = [];
@@ -151,7 +166,7 @@ function contrastIssues(cssTexts: string[]): string[] {
     }
     if (fg && bg) {
       const c = contrast(fg, bg);
-      if (c < 4.5) issues.push(`${sel}: text contrast ${c.toFixed(2)}:1 (needs 4.5:1)`);
+      if (c < 4.5) issues.push(`${sel}: text contrast ${c.toFixed(2)}:1 (needs 4.5:1; rule in ${r.file}; ${contrastHint(fg, bg)})`);
     }
   }
   if (pageFg && pageBg) {
@@ -246,7 +261,7 @@ export function runChecks(files: Record<string, string>, opts: CheckOptions = {}
   const names: string[] = [];
   const jsErr: string[] = [];
   const cssErr: string[] = [];
-  const inlineCss: string[] = [];
+  const inlineCss: { file: string; text: string }[] = [];
 
   if (!files["index.html"]) links.push("index.html is missing (the preview needs an entry page)");
 
@@ -296,7 +311,7 @@ export function runChecks(files: Record<string, string>, opts: CheckOptions = {}
       }
       if ((t === "button" || (t === "a" && attr(n, "href") !== undefined)) && !textOf(n) && !attr(n, "aria-label") && !attr(n, "title"))
         names.push(`${f}: <${t}> has no accessible name`);
-      if (t === "style") inlineCss.push(textOf(n));
+      if (t === "style") inlineCss.push({ file: `${f} <style>`, text: textOf(n) });
       if (t === "script" && !attr(n, "src")) {
         const type = (attr(n, "type") ?? "").toLowerCase();
         if (!type || type === MODULE_WORD || /javascript/.test(type)) {
@@ -330,7 +345,7 @@ export function runChecks(files: Record<string, string>, opts: CheckOptions = {}
     }
   }
 
-  const cssTexts = [...Object.entries(files).filter(([f]) => /\.css$/i.test(f)).map(([, s]) => s), ...inlineCss];
+  const cssTexts = [...Object.entries(files).filter(([f]) => /\.css$/i.test(f)).map(([file, text]) => ({ file, text })), ...inlineCss];
   const contrastErr = contrastIssues(cssTexts);
   const totalBytes = Object.values(files).reduce((n, s) => n + new TextEncoder().encode(s).length, 0);
   const size: string[] = totalBytes > budget ? [`total ${(totalBytes / 1024).toFixed(1)} KB exceeds the ${(budget / 1024).toFixed(0)} KB budget`] : [];

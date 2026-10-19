@@ -195,7 +195,8 @@ export class Orchestrator {
     return JSON.stringify({ thought: call.thought, tool: call.tool, args });
   }
 
-  private async runAgent(role: Role, ctx: PhaseContext): Promise<ToolCall> {
+  /** `softCap`: instead of failing at the step limit, hand off with this summary (fix rounds). */
+  private async runAgent(role: Role, ctx: PhaseContext, softCap?: string): Promise<ToolCall> {
     const repo = this.mode === "repo";
     const messages: ChatMessage[] = [{ role: "system", content: systemPrompt(role, this.mode) }, { role: "user", content: repo ? repoPhaseMessage(role, ctx) : phaseMessage(role, ctx) }];
     const tools = toolSpecs(role, this.mode);
@@ -220,8 +221,12 @@ export class Orchestrator {
       if (call.thought) { this.setAgent(role, { thought: call.thought }); this.say(role, call.thought); }
       messages.push({ role: "assistant", content: this.compactForHistory(call) });
       const result = await this.execTool(role, call);
-      if (result.terminal) return call;
+      if (result.terminal) return result.summary ? { ...call, args: { ...call.args, summary: result.summary } } : call;
       messages.push({ role: "user", content: `TOOL RESULT (${call.tool}): ${result.text}` });
+    }
+    if (softCap) {
+      this.say(role, `step limit reached (${this.config.maxStepsPerAgent}); passing the work on as it is`, "warn");
+      return { thought: "", tool: "handoff", args: { summary: softCap } };
     }
     throw new AgentError(`${ROLE_INFO[role].name} did not finish within ${this.config.maxStepsPerAgent} steps`);
   }
@@ -236,7 +241,7 @@ export class Orchestrator {
     return Math.min(90, Object.keys(this.shipFiles()).length * 25);
   }
 
-  private async execTool(role: Role, call: ToolCall): Promise<{ terminal: boolean; text: string }> {
+  private async execTool(role: Role, call: ToolCall): Promise<{ terminal: boolean; text: string; summary?: string }> {
     const a = call.args as Record<string, string & unknown[]>;
     if (this.mode === "repo" && this.repo) {
       const r = await this.execRepoTool(role, call, this.repo);
@@ -248,6 +253,13 @@ export class Orchestrator {
         if (!path) return { terminal: false, text: JSON.stringify({ ok: false, error: "invalid path (relative static-file paths only, no ..)" }) };
         if (role === "research" && !path.startsWith("notes/")) return { terminal: false, text: JSON.stringify({ ok: false, error: "research may only write under notes/" }) };
         const prev = this.files[path];
+        if (prev === String(a.content)) {
+          this.say(role, `rewrote ${path} with identical content`, "warn");
+          if (role === "coder" && this.lastReport && !this.lastReport.ok && runChecks(this.shipFiles(), { sizeBudgetBytes: this.config.sizeBudgetBytes, syntax: this.deps.syntax }).ok) {
+            return { terminal: true, text: "", summary: "Fixes are in; all checks pass on my side." };
+          }
+          return { terminal: false, text: JSON.stringify({ ok: false, error: `${path} is unchanged: you wrote exactly the same content. Change what the failing check points at (for CSS rules, the file named in "rule in …"), or hand off if you are done.` }) };
+        }
         this.files[path] = String(a.content);
         const touched = this.agents[role].filesTouched;
         if (!touched.includes(path)) touched.push(path);
@@ -259,6 +271,16 @@ export class Orchestrator {
         this.say(role, `${prev === undefined ? "wrote" : "updated"} ${path} (${(String(a.content).length / 1024).toFixed(1)} KB)`);
         this.emit({ type: "files", files: { ...this.files }, changed: [path], by: role });
         if (role === "coder") this.setStep("code", "active", this.codeProgress());
+        // in a fix round, tell the coder at once whether the failing checks now pass
+        if (role === "coder" && this.lastReport && !this.lastReport.ok) {
+          const now = runChecks(this.shipFiles(), { sizeBudgetBytes: this.config.sizeBudgetBytes, syntax: this.deps.syntax });
+          const failing = now.results.filter((r) => r.status === "fail").map((r) => `${r.label}: ${r.details.slice(0, 3).join("; ")}`);
+          if (!failing.length) {
+            this.say(role, "all checks pass now; handing back to Reviewer");
+            return { terminal: true, text: "", summary: `Fixed: ${path} updated, all checks pass on my side.` };
+          }
+          return { terminal: false, text: JSON.stringify({ ok: true, path, bytes: String(a.content).length, checks_now: { still_failing: failing } }) };
+        }
         return { terminal: false, text: JSON.stringify({ ok: true, path, bytes: String(a.content).length }) };
       }
       case "read_file": {
@@ -365,7 +387,7 @@ export class Orchestrator {
         this.markTicket(a.ticket);
         this.say(role, `${existed ? "rewrote" : "created"} ${path} (${(String(a.content).length / 1024).toFixed(1)} KB)`);
         this.emitChanges(role);
-        return { terminal: false, text: JSON.stringify({ ok: true, path, bytes: String(a.content).length }) };
+        return this.fixRoundFeedback(role, path, { ok: true, path, bytes: String(a.content).length });
       }
       case "edit_file": {
         if (role !== "coder") return err("only the coder edits files");
@@ -380,7 +402,7 @@ export class Orchestrator {
         const c = fs.changes().find((x) => x.path === path);
         this.say(role, `patched ${path} (${r.applied} edit${r.applied > 1 ? "s" : ""}${c ? `, +${c.added} −${c.removed}` : ""})`);
         this.emitChanges(role);
-        return { terminal: false, text: JSON.stringify({ ok: true, path, applied: r.applied }) };
+        return this.fixRoundFeedback(role, path, { ok: true, path, applied: r.applied });
       }
       case "delete_file": {
         if (role !== "coder") return err("only the coder deletes files");
@@ -402,6 +424,20 @@ export class Orchestrator {
       default:
         return null;
     }
+  }
+
+  /** Repo fix rounds: re-run the checks after each change and end the coder's turn once they pass. */
+  private async fixRoundFeedback(role: Role, path: string, base: Record<string, unknown>): Promise<{ terminal: boolean; text: string; summary?: string }> {
+    if (role !== "coder" || !this.lastReport || this.lastReport.ok) return { terminal: false, text: JSON.stringify(base) };
+    const prev = this.lastReport;
+    const now = await this.repoChecks();
+    this.lastReport = prev; // the reviewer runs its own checks next
+    const failing = now.results.filter((r) => r.status === "fail").map((r) => `${r.label}: ${r.details.slice(0, 3).join("; ")}`);
+    if (!failing.length) {
+      this.say(role, "all checks pass now; handing back to Reviewer");
+      return { terminal: true, text: "", summary: `Fixed ${path}; all checks pass on my side.` };
+    }
+    return { terminal: false, text: JSON.stringify({ ...base, checks_now: { still_failing: failing } }) };
   }
 
   private async repoChecks(): Promise<RepoReport> {
@@ -546,7 +582,7 @@ export class Orchestrator {
       for (;;) {
         this.setStep("code", "active", round ? 50 : this.codeProgress());
         this.startTickets("coder");
-        const ccall = await this.runAgent("coder", { task: cfg.task, tickets: this.tickets, brief: this.brief, files: this.files, report: round ? report ?? undefined : undefined, round, feedback: reviewFeedback });
+        const ccall = await this.runAgent("coder", { task: cfg.task, tickets: this.tickets, brief: this.brief, files: this.files, report: round ? report ?? undefined : undefined, round, feedback: reviewFeedback }, round ? "Tried to fix the failing checks; over to you." : undefined);
         this.closeTickets("coder");
         this.snapshot(round === 0 ? "Coder v1" : `Coder v${round + 1} (fix round ${round})`);
         this.setStep("code", "done", 100);
@@ -742,7 +778,7 @@ export class Orchestrator {
     for (;;) {
       this.setStep("code", "active", round ? 50 : this.codeProgress());
       this.startTickets("coder");
-      const ccall = await this.runAgent("coder", { task: cfg.task, tickets: this.tickets, brief: this.brief, files: {}, repoContext: this.treeContext, plan: this.plan, report: round ? report ?? undefined : undefined, round, feedback: reviewFeedback, diff: round ? fs.diff() : undefined });
+      const ccall = await this.runAgent("coder", { task: cfg.task, tickets: this.tickets, brief: this.brief, files: {}, repoContext: this.treeContext, plan: this.plan, report: round ? report ?? undefined : undefined, round, feedback: reviewFeedback, diff: round ? fs.diff() : undefined }, round ? "Tried to fix the failing checks; over to you." : undefined);
       this.closeTickets("coder");
       this.snapshot(round === 0 ? "Coder v1" : `Coder v${round + 1} (fix round ${round})`);
       this.setStep("code", "done", 100);
