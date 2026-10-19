@@ -6,24 +6,63 @@ export const ROOM = { x: 18, y: 40, w: 1165, h: 845 };
 
 export interface Pt { x: number; y: number }
 
+/**
+ * The office camera for a W×H element: one uniform scale and offset (CSS px = bg px × s + o) for the
+ * room, the props and the characters alike. Desktop sits a little right of centre so the bookshelf by
+ * the right wall stays in view; a phone zooms into the desk cluster.
+ */
+export function fitView(W: number, H: number): { s: number; ox: number; oy: number } {
+  let s = Math.min(W / ROOM.w, H / ROOM.h) * 1.13;
+  let cx = ROOM.x + ROOM.w / 2 + 36, cy = ROOM.y + ROOM.h / 2;
+  if (W < 680 || W / Math.max(1, H) < 0.9) {
+    s = Math.max(s, Math.min(H / 500, W / 600));
+    cx = 505; cy = 505;
+  }
+  let ox = W / 2 - cx * s, oy = H / 2 - cy * s;
+  if (BG.w * s > W) ox = Math.max(W - BG.w * s, Math.min(0, ox));
+  if (BG.h * s > H) oy = Math.max(H - BG.h * s, Math.min(0, oy));
+  return { s, ox, oy };
+}
+
 export interface Seat {
-  /** where the character stands before sitting */
+  /** where the character stands before sitting (a step from the chair, so sitting down is not a jump) */
   approach: Pt;
-  /** feet / sprite bottom-centre while seated */
+  /** feet / sprite bottom-centre while seated: placed so the sit sprite's hips land on the chair's cushion */
   seat: Pt;
   /** "back" = seen from behind facing up-left (sitA/sitB), "front" = facing the viewer behind the desk */
   facing: "back" | "front";
-  /** front-facing sitters are hidden below this y by the desk */
-  clipY?: number;
+  /** centre of the chair's seat cushion as painted in office.png (where the hips go) */
+  chair: Pt;
+  /**
+   * back-facing chairs: the backrest outline in office.png. The backrest is nearer the viewer than the
+   * person sitting in it, so it is painted again over the sitter (without it they hover in front of the chair).
+   */
+  chairBack?: Pt[];
+  /**
+   * front-facing seats: the desk's back edge in office.png (a line through `x,y` with `slope`, the room's
+   * 2:1 isometric). The sitter is hidden below it, so the desk covers the legs.
+   */
+  deskEdge?: { x: number; y: number; slope: number };
   monitor: Pt;
 }
 
+/** y of a desk's back edge at x */
+export const deskEdgeY = (e: { x: number; y: number; slope: number }, x: number) => e.y + e.slope * (x - e.x);
+
+// the three front-row chairs are the same painted chair, so their backrests share one outline
+const PM_BACK: Pt[] = [
+  { x: 504, y: 511 }, { x: 511, y: 503 }, { x: 536, y: 494 }, { x: 542, y: 499 }, { x: 542, y: 531 },
+  { x: 532, y: 538 }, { x: 528, y: 546 }, { x: 519, y: 546 }, { x: 504, y: 543 },
+];
+const backAt = (dx: number, dy: number) => PM_BACK.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+
+// Measured against office.png and the sit sprites in atlas.json (tests/office-seats.test.ts checks them).
 export const SEATS: Record<Role, Seat> = {
-  pm: { approach: { x: 560, y: 582 }, seat: { x: 520, y: 566 }, facing: "back", monitor: { x: 452, y: 452 } },
-  research: { approach: { x: 432, y: 352 }, seat: { x: 482, y: 374 }, facing: "front", clipY: 346, monitor: { x: 566, y: 318 } },
-  coder: { approach: { x: 566, y: 744 }, seat: { x: 517, y: 742 }, facing: "back", monitor: { x: 450, y: 646 } },
-  reviewer: { approach: { x: 740, y: 662 }, seat: { x: 688, y: 662 }, facing: "back", monitor: { x: 622, y: 553 } },
-  ops: { approach: { x: 262, y: 506 }, seat: { x: 212, y: 566 }, facing: "front", clipY: 552, monitor: { x: 282, y: 545 } },
+  pm: { approach: { x: 474, y: 584 }, seat: { x: 503, y: 554 }, facing: "back", chair: { x: 502, y: 541 }, chairBack: PM_BACK, monitor: { x: 452, y: 452 } },
+  research: { approach: { x: 446, y: 338 }, seat: { x: 482, y: 388 }, facing: "front", chair: { x: 486, y: 331 }, deskEdge: { x: 482, y: 345, slope: -0.5 }, monitor: { x: 566, y: 318 } },
+  coder: { approach: { x: 474, y: 770 }, seat: { x: 503, y: 740 }, facing: "back", chair: { x: 502, y: 727 }, chairBack: backAt(0, 186), monitor: { x: 450, y: 646 } },
+  reviewer: { approach: { x: 646, y: 686 }, seat: { x: 675, y: 656 }, facing: "back", chair: { x: 674, y: 643 }, chairBack: backAt(172, 102), monitor: { x: 622, y: 553 } },
+  ops: { approach: { x: 246, y: 536 }, seat: { x: 212, y: 580 }, facing: "front", chair: { x: 211, y: 557 }, deskEdge: { x: 212, y: 564, slope: -0.5 }, monitor: { x: 282, y: 545 } },
 };
 
 export const SPOTS = {

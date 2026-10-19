@@ -3,11 +3,15 @@ declare module "node:fs" {
   export function mkdirSync(p: string, o?: { recursive?: boolean }): void;
   export function writeFileSync(p: string, d: string): void;
   export function readFileSync(p: string, e: "utf8"): string;
+  export function readFileSync(p: string): Uint8Array;
   export function mkdtempSync(prefix: string): string;
 }
 declare module "node:path" {
   export function join(...p: string[]): string;
   export function dirname(p: string): string;
+}
+declare module "node:zlib" {
+  export function inflateSync(d: Uint8Array): Uint8Array;
 }
 declare module "node:os" {
   export function tmpdir(): string;

@@ -3,7 +3,7 @@
 // fetching coffee. Lamp glow, monitor light and rain are drawn live on a 2D canvas.
 
 import atlasJson from "./atlas.json";
-import { BG, BOARD, LAMPS, ROOM, SEATS, SPOTS, WINDOW, dist, findPath, quad, type Pt } from "./layout";
+import { BOARD, LAMPS, SEATS, SPOTS, WINDOW, deskEdgeY, dist, findPath, fitView, quad, type Pt, type Seat } from "./layout";
 import { ROLES, ROLE_INFO, type Role, type Ticket } from "../engine/types";
 
 type Frame = { x: number; y: number; w: number; h: number };
@@ -74,6 +74,8 @@ export class Office {
   private rand = rng(20261019);
   private ro: ResizeObserver;
   private layers: OfficeLayer[] = [];
+  /** the lit room under each back-facing chair's backrest, copied before the characters are drawn */
+  private chairPatches: Partial<Record<Role, { c: HTMLCanvasElement; x: number; y: number; ok: boolean }>> = {};
   /** 0 = lights on, 1 = lamps fully dimmed (idle office) */
   dim = 0;
   speed: number;
@@ -143,23 +145,14 @@ export class Office {
     c.height = Math.round(H * dpr);
     c.style.width = W + "px";
     c.style.height = H + "px";
-    let s = Math.min(W / ROOM.w, H / ROOM.h) * 1.13;
-    // a little right of centre, so the bookshelf by the right wall stays in view
-    let cx = ROOM.x + ROOM.w / 2 + 36, cy = ROOM.y + ROOM.h / 2;
-    if (W < 680 || W / Math.max(1, H) < 0.9) {
-      // narrow (phone): zoom into the desk cluster like the mobile mockup
-      s = Math.max(s, Math.min(H / 500, W / 600));
-      cx = 505; cy = 505;
-    }
-    let ox = W / 2 - cx * s, oy = H / 2 - cy * s;
-    if (BG.w * s > W) ox = Math.max(W - BG.w * s, Math.min(0, ox));
-    if (BG.h * s > H) oy = Math.max(H - BG.h * s, Math.min(0, oy));
+    // one scale + offset for the room and everyone in it (layout.ts fitView), so seats stay on their chairs
+    const { s, ox, oy } = fitView(W, H);
     this.view = { s, ox, oy, w: W, h: H, dpr };
   }
   private toBg(x: number, y: number): Pt { return { x: (x - this.view.ox) / this.view.s, y: (y - this.view.oy) / this.view.s }; }
   private toScreen(p: Pt): Pt { return { x: p.x * this.view.s + this.view.ox, y: p.y * this.view.s + this.view.oy }; }
 
-  private frameFor(a: Actor, t: number): { name: string; flip: boolean; clipY?: number } {
+  private frameFor(a: Actor, t: number): { name: string; flip: boolean; desk?: Seat["deskEdge"] } {
     const r = a.role;
     const tick = Math.floor((t / 1000 + a.phase) * 6);
     if (a.mode === "walk") {
@@ -170,7 +163,7 @@ export class Office {
     if (a.mode === "stand") return { name: `${r}_${a.look === "front" ? "idle" : "back"}`, flip: a.flip };
     const seat = SEATS[r];
     const typing = a.working && Math.floor((t / 1000 + a.phase) * 5) % 2 === 0;
-    if (seat.facing === "front" && FRAMES[`${r}_fsitA`]) return { name: `${r}_${typing ? "fsitB" : "fsitA"}`, flip: false, clipY: seat.clipY };
+    if (seat.facing === "front" && FRAMES[`${r}_fsitA`]) return { name: `${r}_${typing ? "fsitB" : "fsitA"}`, flip: false, desk: seat.deskEdge };
     return { name: `${r}_${typing ? "sitB" : "sitA"}`, flip: false };
   }
 
@@ -480,6 +473,7 @@ export class Office {
     }
     ctx.globalCompositeOperation = "source-over";
 
+    this.grabChairBacks();
     // characters, back to front
     const order = ROLES.map((r) => this.actors[r]).sort((a, b) => a.y - b.y);
     for (const a of order) {
@@ -495,27 +489,41 @@ export class Office {
       ctx.save();
       if (a.pose && a.poseUntil !== undefined && performance.now() > a.poseUntil) a.pose = undefined;
       if (a.pose === "lie") { this.drawLying(a, t); ctx.restore(); continue; }
-      if (fr.clipY !== undefined) { ctx.beginPath(); ctx.rect(a.x - 80, a.y - 200, 160, 200 - (a.y - fr.clipY)); ctx.clip(); }
+      const seated = a.mode === "sit";
+      if (fr.desk) {
+        // behind the desk: everything below the desk's (sloped) back edge is hidden by the desk
+        const x0 = a.x - 80, x1 = a.x + 80;
+        ctx.beginPath();
+        ctx.moveTo(x0, a.y - 220); ctx.lineTo(x1, a.y - 220);
+        ctx.lineTo(x1, deskEdgeY(fr.desk, x1)); ctx.lineTo(x0, deskEdgeY(fr.desk, x0));
+        ctx.closePath();
+        ctx.clip();
+      }
       const until = this.celebrateUntil[a.role] ?? 0;
-      const hop = t < until ? Math.abs(Math.sin(t / 140)) * 9 : 0;
+      // a cheer hops a standing agent; a seated one only bounces in the chair, never off it
+      const hop = t < until ? Math.abs(Math.sin(t / 140)) * (seated ? 2 : 9) : 0;
       // dozing: the head sinks (and bobs with the breath); a slump sinks less
       const sink = a.pose === "sleep" ? 4 + Math.round(Math.sin(t / 900 + a.phase)) : a.pose === "slump" ? 3 : 0;
       const dx = Math.round(a.x - f.w / 2), dy = Math.round(a.y - f.h - hop + sink);
       // a stuck agent (insights) sways while scratching its head
       const stuck = this.stuck.has(a.role);
-      if (stuck) { ctx.translate(a.x, a.y); ctx.rotate(Math.sin(t / 160) * 0.045); ctx.translate(-a.x, -a.y); }
+      // (seated: it pivots on the hips in the chair, so the sway never lifts them off the cushion)
+      const pivot = seated ? SEATS[a.role].chair : a;
+      if (stuck) { ctx.translate(pivot.x, pivot.y); ctx.rotate(Math.sin(t / 160) * 0.045); ctx.translate(-pivot.x, -pivot.y); }
       if (a.pose === "stretch") {
-        // stretch: taller for a moment, from the feet up
+        // stretch: taller for a moment, from the feet up (seated: from the hips, so they stay in the chair)
         const k = 1 + 0.09 * Math.abs(Math.sin(t / 260));
-        ctx.translate(Math.round(a.x), Math.round(a.y));
+        const base = seated ? Math.min(a.y, SEATS[a.role].chair.y + 4) : a.y;
+        ctx.translate(Math.round(a.x), Math.round(base));
         ctx.scale(fr.flip ? -1 : 1, k);
-        ctx.drawImage(this.atlas, f.x, f.y, f.w, f.h, -Math.round(f.w / 2), -f.h, f.w, f.h);
+        ctx.drawImage(this.atlas, f.x, f.y, f.w, f.h, -Math.round(f.w / 2), -f.h + Math.round(a.y - base), f.w, f.h);
       } else if (fr.flip) {
         ctx.translate(dx + f.w, dy);
         ctx.scale(-1, 1);
         ctx.drawImage(this.atlas, f.x, f.y, f.w, f.h, 0, 0, f.w, f.h);
       } else ctx.drawImage(this.atlas, f.x, f.y, f.w, f.h, dx, dy, f.w, f.h);
       ctx.restore();
+      if (seated) this.drawChairBack(a.role);
       if (stuck) this.drawScratch(a, f, t);
     }
 
@@ -528,6 +536,52 @@ export class Office {
     for (const l of this.layers) l.top?.(ctx, t);
     this.placeOverlays(t, order);
     for (const l of this.layers) l.place?.(t);
+  }
+
+  /**
+   * Copies the finished room (lights, glow, layers) under each occupied back-facing chair's backrest,
+   * in device pixels, so drawChairBack can lay the backrest over its sitter exactly as it was painted.
+   */
+  private grabChairBacks() {
+    const { s, ox, oy, dpr } = this.view;
+    const src = this.ctx.canvas;
+    for (const r of ROLES) {
+      const pts = SEATS[r].chairBack;
+      const prev = this.chairPatches[r];
+      if (prev) prev.ok = false;
+      const a = this.actors[r];
+      if (!pts || a.mode !== "sit" || a.pose === "lie") continue;
+      const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+      const x = Math.max(0, Math.floor((Math.min(...xs) * s + ox) * dpr) - 2);
+      const y = Math.max(0, Math.floor((Math.min(...ys) * s + oy) * dpr) - 2);
+      const x2 = Math.min(src.width, Math.ceil((Math.max(...xs) * s + ox) * dpr) + 2);
+      const y2 = Math.min(src.height, Math.ceil((Math.max(...ys) * s + oy) * dpr) + 2);
+      if (x2 <= x || y2 <= y) continue;
+      const p = prev ?? (this.chairPatches[r] = { c: document.createElement("canvas"), x: 0, y: 0, ok: false });
+      const w = x2 - x, h = y2 - y;
+      if (p.c.width !== w || p.c.height !== h) { p.c.width = w; p.c.height = h; }
+      const pc = p.c.getContext("2d");
+      if (!pc) continue;
+      pc.clearRect(0, 0, w, h);
+      pc.drawImage(src, x, y, w, h, 0, 0, w, h);
+      p.x = x; p.y = y; p.ok = true;
+    }
+  }
+
+  /** the chair's backrest is nearer the viewer than its (back-facing) sitter: paint it back over them */
+  private drawChairBack(role: Role) {
+    const pts = SEATS[role].chairBack;
+    const p = this.chairPatches[role];
+    if (!pts || !p?.ok) return;
+    const c = this.ctx;
+    c.save();
+    c.beginPath();
+    pts.forEach((q, i) => (i ? c.lineTo(q.x, q.y) : c.moveTo(q.x, q.y)));
+    c.closePath();
+    c.clip();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.drawImage(p.c, p.x, p.y);
+    c.restore();
   }
 
   /** a character lying on the bench, seen above its backrest */

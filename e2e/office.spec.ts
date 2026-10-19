@@ -1,5 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
-import { trackErrors, isMobile } from "./helpers";
+import { trackErrors, isMobile, openApp } from "./helpers";
+import { SEATS } from "../src/office/layout";
 
 // The office reacts to activity (lights, sleep, wake, scoreboard), Hermes' skills and memory
 // (bookshelf, filing cabinet, Library panel) and many Hermes in one building. Events go in the way
@@ -162,5 +163,55 @@ test("building: create from my office, add a second Hermes, ride the elevator be
   await expect(viewer.locator("#mode-chip")).toContainText("Read-only");
   expect(verr).toEqual([]);
   await ctx.close();
+  expect(errors).toEqual([]);
+});
+
+test("seated agents sit in their chairs: the backrest shows over every back-facing sitter (working and asleep)", async ({ page }) => {
+  const errors = trackErrors(page);
+  await openApp(page);
+  // the backrest outlines from layout.ts, sampled on the canvas: the painted chair, not the agent's shirt
+  const backs = Object.fromEntries(Object.entries(SEATS).filter(([, s]) => s.chairBack).map(([r, s]) => [r, s.chairBack!]));
+  const sample = () => page.evaluate((backs) => {
+    const o = (window as unknown as { __overtime: { office: { bgToScreen(p: { x: number; y: number }): { x: number; y: number }; actors: Record<string, { mode: string }> } } }).__overtime.office;
+    const c = document.querySelector<HTMLCanvasElement>(".office-canvas")!;
+    const k = c.width / c.clientWidth;
+    const ctx = c.getContext("2d")!;
+    const out: Record<string, { n: number; chair: number; mode: string }> = {};
+    for (const [role, poly] of Object.entries(backs)) {
+      const xs = poly.map((p) => p.x), ys = poly.map((p) => p.y);
+      const inside = (x: number, y: number) => { let v = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j]; if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) v = !v; } return v; };
+      let n = 0, chair = 0;
+      for (let y = Math.min(...ys) + 3; y < Math.max(...ys) - 2; y += 3) for (let x = Math.min(...xs) + 3; x < Math.max(...xs) - 2; x += 3) {
+        if (!inside(x, y) || !inside(x - 2, y) || !inside(x + 2, y) || !inside(x, y - 2) || !inside(x, y + 2)) continue;
+        const p = o.bgToScreen({ x, y });
+        const X = Math.round(p.x * k), Y = Math.round(p.y * k);
+        if (X < 0 || Y < 0 || X >= c.width || Y >= c.height) continue;
+        const [r, g, b] = ctx.getImageData(X, Y, 1, 1).data;
+        n++;
+        // the chairs are dark and nearly grey; shirts/trousers/hair over them are bright, blue or khaki
+        if (Math.max(r, g, b) < 120 && Math.abs(r - b) <= 36 && Math.abs(g - b) <= 22) chair++;
+      }
+      out[role] = { n, chair, mode: o.actors[role].mode };
+    }
+    return out;
+  }, backs);
+  await page.evaluate(() => {
+    const o = (window as unknown as { __overtime: { office: { nextAmbient: number; reset(): void } } }).__overtime.office;
+    o.nextAmbient = Infinity;
+    o.reset();
+  });
+  await expect.poll(async () => Object.values(await sample()).every((s) => s.mode === "sit"), { timeout: 20_000 }).toBe(true);
+  const check = async (label: string) => {
+    for (const [role, s] of Object.entries(await sample())) {
+      if (s.n < 6) continue; // off screen on a phone
+      expect(s.chair / s.n, `${label}: ${role}'s backrest over them (${s.chair}/${s.n} chair pixels)`).toBeGreaterThan(0.8);
+    }
+  };
+  await page.evaluate(() => { const o = (window as unknown as { __overtime: { office: { setWorking(r: string, w: boolean): void } } }).__overtime.office; for (const r of ["pm", "research", "coder", "reviewer", "ops"]) o.setWorking(r, true); });
+  await page.waitForTimeout(600);
+  await check("working");
+  await page.evaluate(() => { const o = (window as unknown as { __overtime: { office: { sleep(r: string, sofa?: boolean): Promise<void> } } }).__overtime.office; for (const r of ["pm", "coder"]) void o.sleep(r); });
+  await page.waitForTimeout(600);
+  await check("asleep");
   expect(errors).toEqual([]);
 });
