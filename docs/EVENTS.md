@@ -53,6 +53,7 @@ in clear so `/share` can hand the viewer link to the agent.
 | `GET /api/ext/runs/:id` | view or ingest | Office info and the 50 most recent sessions |
 | `GET /api/ext/runs/:id/stream?v=<token>&after=<seq>` | view or ingest | WebSocket: backlog after `seq`, then live `{"type":"events","events":[…]}` |
 | `GET /api/ext/runs/:id/share` | ingest | `{ "watch": "<viewer URL>" }` (what `/overtime` prints in Hermes) |
+| `GET /api/ext/runs/:id/insights` | view or ingest | `{ "events": […], "truncated" }`: the newest 20,000 `llm.call`, `session.start`, `session.end` and user `message` events, subagent sessions folded into their parent. Feeds the cost dashboard and budgets (`worker/src/insights.ts`) |
 
 The viewer page is `/watch/<office>#v=<view token>`. The token rides in the URL fragment, so it is
 never sent to a server or a referrer.
@@ -203,6 +204,48 @@ the extension point: a future transport could implement `respond()` on top of He
 transport API (`ctx.register_approval_transport(name, present_fn)`, selected by the operator with
 `security.approval.transport`), where the plugin waits for an authenticated decision from Overtime and
 returns `request.respond(choice)`.
+
+## Insight signals (for notifications)
+
+Insights (`src/insights/`) watch the office and emit two **internal** signals. They are not stored
+events and never go back to the agent; they exist so a notifier (Telegram, web push, an email
+digest) can hook in without knowing how they are computed. Each condition is emitted **once**: a
+budget once per period and limit, a stuck session once per streak of evidence (a new streak emits
+again; a dismissed banner stays dismissed for that streak).
+
+```ts
+import { onSignal } from "./src/insights/signals";
+const off = onSignal((s) => {
+  if (s.type === "session.stuck") notify(`Hermes looks stuck in “${s.title}”: ${s.reasons[0].text}`);
+  if (s.type === "budget.exceeded") notify(`Hermes spent $${s.spentUsd.toFixed(2)} of $${s.limitUsd} ${s.period === "day" ? "today" : "this month"}`);
+});
+// outside the bundle: window.addEventListener("overtime:signal", (e) => console.log(e.detail))
+```
+
+| Signal | Fields |
+|---|---|
+| `session.stuck` | `session`, `title`, `reasons: [{ kind, text, since, tool? }]`, `office?`, `at` (epoch ms) |
+| `budget.exceeded` | `period` (`day` / `month`, local calendar), `periodKey` (`2026-10-19` / `2026-10`), `spentUsd`, `limitUsd`, `office?`, `at` |
+
+`kind` is one of:
+
+| Kind | Fires when (defaults, editable in *Insights → Alerts*) |
+|---|---|
+| `repeat-tool` | the same tool with the same arguments (`args_summary`, else `target`) 4 times in a row. A call announced by both `tool.start` and `tool.end` counts once |
+| `repeat-error` | 3 failures among the last 6 tool results and `error` events, and the latest one failed. A `terminal` run that Hermes reports as ok but whose output says `1 failed` / `FAILED` / a traceback counts as a failure |
+| `idle` | no events for 10 minutes while a turn is running |
+| `cost-spike` | the latest model call costs at least 5× the median of the session's earlier calls, and at least $0.05 |
+
+Only a running turn can be stuck: nothing fires after `session.end`, or while the agent waits for an
+approval or for your answer. `since` is the `seq` of the first event of the evidence, which is what
+makes "once per streak" work (`stuckKey(session, reason)`).
+
+**Where they run today.** In the browser that watches the office (owner tab or `/watch` viewer),
+because that is where thresholds and budgets are configured. The detectors are pure functions
+(`detectStuck(events, now, thresholds)` in `src/insights/stuck.ts`, `budgetStatus(spend, cfg)` and
+`spendNow(events)` in `src/insights/budget.ts` / `aggregate.ts`) with no DOM, so a server-side
+notifier can run the same code: call them from `ExtOffice.ingest` after storing a batch (with the
+session's events from SQLite) and from the office's alarm for `idle`, then dedupe with `SignalGate`.
 
 ## Generic example
 

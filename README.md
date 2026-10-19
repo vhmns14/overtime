@@ -66,6 +66,35 @@ Rules for who shows what are editable (*Setup → Advanced*). **Overtime never a
 
 **Tested against a real Hermes.** Hermes Agent 0.19.0 (PyPI) with `openai/gpt-4o-mini` on OpenRouter, the plugin installed with exactly the curl lines above, a small task (plan, write two files, run pytest) against `wrangler dev`: every hook arrived and the office above is that run. The outbound-webhook path was checked by running Hermes' own serialisation and signing code (`agent/outbound_webhooks.py` from `main`) against a local office.
 
+## Insights: replay, timeline, summary, costs, stuck detection
+
+Open **Insights** (panel footer, or the top bar on a phone) on any Hermes office, the read-only viewer or the recorded demo.
+
+| Replay timelapse with a scrubber and export | Timeline: filter, search, jump the office to an event |
+|---|---|
+| ![Replay](docs/insights-replay-desktop.png) | ![Timeline](docs/insights-timeline-desktop.png) |
+| **Session summary card (PNG or markdown)** | **Cost dashboard: per day, per model, per session, budgets** |
+| ![Summary](docs/insights-summary-desktop.png) | ![Costs](docs/insights-costs-desktop.png) |
+| **Stuck detection: a "?" over the agent and a banner** | **Budget banner** |
+| ![Stuck](docs/insights-stuck-desktop.png) | ![Budget](docs/insights-budget-desktop.png) |
+
+A replay exported straight from the browser (GIF, demo session at 16x, caption on):
+
+![Replay exported as a GIF](docs/insights-replay-desktop.gif)
+
+<p align="center"><img src="docs/insights-replay-mobile.png" width="240" alt="Phone: replay"> <img src="docs/insights-timeline-mobile.png" width="240" alt="Phone: timeline under the office"> <img src="docs/insights-stuck-mobile.png" width="240" alt="Phone: stuck banner"></p>
+
+- **Replay** any stored session in the office at 1x, 2x, 4x, 8x or 16x: play/pause, a scrubber with red marks where something failed, jump to the previous/next event, and the panel (steps, log, cost so far) follows. Idle gaps longer than 5 s are squeezed to 5 s, so a session that waited an hour for you does not replay an hour of nothing. Live events keep arriving in the background; **Live ✕** goes back.
+- **Export** the replay in the browser: **GIF** (an encoder in `src/insights/gif.ts`: median-cut palette, only the changed box of each frame, identical frames merged, 560 px at 10 fps) or **WebM/MP4** (MediaRecorder on a captured canvas, 960 px at 30 fps; MP4 when the browser can record it). Optional caption (task, cost and tokens so far, clock) and a small "made with Overtime" corner. Long sessions are sped up so a GIF stays under ~20 s and a video under ~40 s. The recorded demo exports to a ~0.6–1 MB GIF.
+- **Timeline**: every event of a session, filterable by tools / errors / LLM / files / subagents / approvals, with search over titles and details. Clicking an event pauses the replay exactly there and opens its details, redacted again on display. On a phone the sheet opens under the office so the jump stays visible.
+- **Session summary card** when a session ends: what was done (plan progress, files changed, research, test runs, subagents, approvals, all derived from events), files changed, top tools, errors, total cost, tokens, duration and models. **Download PNG**, **copy / download markdown**. If you set your own model key (*Settings → Live*), an optional two-line summary can be written from the derived facts only, never prompts, files or outputs.
+- **Cost dashboard**: cost or tokens per day (14 or 30 days, local time), per model and per session, a token breakdown, today and this month. For a real office the numbers come from the Worker's `GET /api/ext/runs/:id/insights` (the newest 20,000 model calls of the whole office), not just what the tab loaded. The demo adds clearly labelled sample history so the charts have something to show.
+- **Budgets** per day and per month: an orange banner from 80 %, a red one past the limit, and a `budget.exceeded` signal. Overtime never stops Hermes.
+- **Stuck detection** with thresholds you can change (*Insights → Alerts*): the same tool with the same arguments N times in a row, repeated failures, no events for X minutes while a turn runs, a cost spike. The character who was doing it scratches its head under a red "?", a banner says why, and a `session.stuck` signal fires once per streak. Nothing fires while Hermes waits for your approval.
+- **Signals for notifications**: `session.stuck` and `budget.exceeded` go through `onSignal()` (`src/insights/signals.ts`) and a `overtime:signal` DOM event, so a notifier (Telegram, web push) can hook in. Fields and rules: [docs/EVENTS.md → Insight signals](docs/EVENTS.md#insight-signals-for-notifications).
+
+Budgets, thresholds and the replay speed are saved in this browser (`localStorage`).
+
 ---
 
 ## The built-in team
@@ -131,7 +160,7 @@ Five agents take a task like *"Build a landing page for Kopi Senja"* and turn it
 - **Phone layout.** The office sits on top with a bottom sheet below. Approvals open as a full-screen card with the agent's portrait, a diff snippet and the spend so far.
 - **Files view.** File tree and code viewer, a version picker (Coder v1, v2…), a line diff against the previous iteration, a sandboxed preview iframe and a ZIP download.
 - **Run history** (last 8 runs) is saved in `localStorage`. Settings live there too. It degrades to memory when storage is blocked.
-- **Single-file offline build.** `npm run build:preview` produces `preview.html`: one inline classic `<script>` that runs all three demos (the recorded Hermes session first) inside a sandboxed iframe with no network and no storage.
+- **Single-file offline build.** `npm run build:preview` produces `preview.html`: one inline classic `<script>` that runs all three demos (the recorded Hermes session first) inside a sandboxed iframe with no network and no storage. Insights work there too (replay, timeline, summary, costs; a GIF export shows inline since the sandbox blocks downloads).
 
 ## Quick start
 
@@ -147,9 +176,9 @@ Other scripts:
 |---|---|
 | `npm run build` | Type-checks, then builds the app into `dist/` (served by the Worker's static assets) |
 | `npm run dev:worker` | Serves `dist/` and the Worker together on :8787, the same way production does |
-| `npm test` | Vitest unit tests: external-agent schema, redaction, Hermes payload mapping, HMAC verification, token auth, rate and size limits, the office Durable Object on real SQLite, the office reducer (roles, subagents, approvals, cost, sessions; a captured real Hermes run and the recorded demo); orchestrator (both modes), tool calls, checks, budget cap, approvals, injection safety, mocked GitHub (tree, patches, branch, commit, PR, error paths, token redaction), mocked LLM (JSON repair, tool calling fallback, 429 backoff, streaming), the smoke script |
+| `npm test` | Vitest unit tests: external-agent schema, redaction, Hermes payload mapping, HMAC verification, token auth, rate and size limits, the office Durable Object on real SQLite, the office reducer (roles, subagents, approvals, cost, sessions; a captured real Hermes run and the recorded demo); insights (session stats, cost per day/model/session with time zones, stuck heuristics, budgets and signal dedupe, replay timing at every speed, timeline filters and redaction, the GIF encoder round-trip, the insights endpoint); orchestrator (both modes), tool calls, checks, budget cap, approvals, injection safety, mocked GitHub (tree, patches, branch, commit, PR, error paths, token redaction), mocked LLM (JSON repair, tool calling fallback, 429 backoff, streaming), the smoke script |
 | `npm run test:plugin` | pytest for the Hermes plugin: observer-only registration, privacy trimming, batching, timeouts, failure isolation |
-| `npm run test:e2e` | Playwright at 390×844 and 1440×900 (Connect Hermes flow, live events, watch view, the demos, 0 console errors). Run `npm run build` and `npm run build:preview` first |
+| `npm run test:e2e` | Playwright at 390×844 and 1440×900 (Connect Hermes flow, live events, watch view, the demos, insights: replay controls, GIF/WebM export, timeline filter + jump, summary, cost dashboard + budget, stuck banner; 0 console errors). Run `npm run build` and `npm run build:preview` first. `OT_PORT=8797` runs it on another port |
 | `npm run build:preview` | Builds `preview.html` (all demos, fully offline) and prints its sha256 |
 | `npm run live:smoke` | A real end-to-end run from the terminal against your provider (and, optionally, your repo). See *Live smoke test* |
 | `npm run atlas` | Rebuilds the sprite atlas and office background from `art/raw/` |
@@ -226,6 +255,8 @@ src/
     llm.ts           OpenAI-compatible client: tool calling → JSON mode → prompt fallback, streaming, 429 backoff, test connection
     diff.ts zip.ts storage.ts
   ext/               external agents: event schema v1, redaction, Hermes mapper, role rules, office reducer, HMAC/tokens, pricing
+  insights/          replay clock, timeline, session stats + summary card, cost aggregations, budgets, stuck heuristics, signals (pure);
+                     GIF encoder, frame composer + MediaRecorder export, SVG charts, and the Insights UI (ui.ts)
   demo/              recorded Hermes session; DemoLLM: recorded team runs (Kopi Senja; warung-cart bug fix → PR), FakeGitHub, mock OpenAI server
   office/            canvas renderer: pre-rendered isometric room + sprite atlas, nav graph, lights, rain
   app/               UI controller (vanilla TS), Hermes connect/live/watch (hermes.ts), settings, deploy/preview/GitHub
@@ -250,6 +281,7 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 | `POST /api/ext/runs/:id/events` · `/hermes` | Generic events · Hermes plugin batches. Bearer ingest token, validated, redacted, rate-limited |
 | `POST /api/ext/hermes/webhook/:id` | Hermes outbound webhooks, HMAC-SHA256 (`X-Hermes-Signature-256`), 5-minute replay window, delivery dedupe |
 | `GET /api/ext/runs/:id/events` · `/stream` | Replay for late viewers · live WebSocket (hibernatable). View or ingest token |
+| `GET /api/ext/runs/:id/insights` | Model calls and session boundaries of the whole office for the cost dashboard and budgets. View or ingest token |
 | `GET /hermes-overtime/*` | The plugin files, served by your own deployment for the Connect screen's curl lines |
 
 **Why a custom canvas renderer instead of Phaser or Pixi?** The office is one pre-rendered isometric room with a handful of sprites, glows and rain. A ~600-line renderer covers that, keeps the bundle around 260 KB and makes the single-file classic-script preview possible. Bundled game engines don't survive that preview's constraints.
@@ -282,6 +314,7 @@ art/raw/             generated source art; scripts/build-atlas.py slices + packs
 - Remote approvals for Hermes through its approval-transport API (the read-only `ApprovalTransport` seam is in place), streaming Hermes' replies into speech bubbles
 - Adapters for more agents on the generic events API (Claude Code hooks, OpenAI Agents SDK tracing)
 - Shareable read-only replays of built-in team runs (external-agent offices already have them)
+- Server-side stuck/budget checks in the office Durable Object, so notifications work with no browser open (the detectors are already pure)
 
 ## License
 

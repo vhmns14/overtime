@@ -16,6 +16,7 @@ import { Office, portraitURL } from "../office/scene";
 import { wordmarkSVG } from "../ui/wordmark";
 import { buildGitHub, buildLLM, llmSettings, loadSettings, saveSettings, secrets, type Settings, type Surface } from "./settings";
 import { HermesController } from "./hermes";
+import { InsightsController } from "../insights/ui";
 import { deployToWorker, fetchRef, inlinePreview, esc } from "./deploy";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
@@ -39,7 +40,7 @@ interface HistoryItem {
 }
 interface ChangeView { path: string; status: "added" | "modified" | "deleted"; added: number; removed: number; diff: string }
 const HISTORY_KEY = "overtime:history:v1";
-const OVERLAYS = ["files", "settings", "history", "github", "hermes"] as const;
+const OVERLAYS = ["files", "settings", "history", "github", "hermes", "insights"] as const;
 type Overlay = (typeof OVERLAYS)[number];
 
 function runTitle(task: string) {
@@ -74,6 +75,7 @@ export class App {
   private lastThought = {} as Record<Role, string>;
   private speed: number;
   private hermes!: HermesController;
+  private insights!: InsightsController;
   /** /watch/<office>#v=<view token>: a read-only viewer of someone's Hermes office */
   private watch: { id: string; token: string } | null = null;
 
@@ -133,6 +135,22 @@ export class App {
       openOverlay: (id) => this.open(id),
       closeOverlay: (id) => this.close(id),
     });
+    this.insights = new InsightsController({
+      office: this.office,
+      officeEl: $("#office"),
+      hermes: this.hermes,
+      renderSteps: (st) => this.renderSteps(st),
+      renderLog: (log, at, empty) => this.renderLog(log, at, empty),
+      renderCost: (usd, tok, by, opts) => this.renderCost(usd, tok, by, opts),
+      setChip: (html, status) => { $("#mode-chip").innerHTML = html; $("#mode-chip").dataset.status = status; },
+      toast: (m) => this.toast(m),
+      openOverlay: () => this.open("insights"),
+      closeOverlay: () => this.close("insights"),
+      isHermes: () => this.onHermes,
+      settings: () => this.s,
+      officeAccess: () => this.watch ?? (this.hermes.creds ? { id: this.hermes.creds.runId, token: this.hermes.creds.viewToken } : null),
+    });
+    this.insights.mount();
     document.addEventListener("overtime:surface", (e) => { this.applyTarget(String((e as CustomEvent).detail)); this.enterSurface(); });
     this.renderSteps(Object.fromEntries(STEPS.map((s) => [s.id, { state: "pending" }])) as Record<StepId, { state: StepState; pct?: number }>);
     this.renderLog([]);
@@ -143,6 +161,7 @@ export class App {
   /** (Re)enters the current surface: Hermes office, Hermes demo, read-only viewer, or the team. */
   private enterSurface() {
     if (this.orch && ["running", "waiting", "paused"].includes(this.orch.status)) this.orch.cancel();
+    this.insights?.onSurface();
     $("#app").classList.toggle("is-hermes", this.onHermes);
     $("#app").classList.toggle("is-watch", !!this.watch);
     if (this.onHermes) {
@@ -530,6 +549,7 @@ export class App {
     if (which === "history") this.renderHistory();
     if (which === "github") this.renderGitHub();
     if (which === "hermes") this.hermes.renderSetup();
+    if (which === "insights") this.insights.renderOverlay();
     const el = $(`#${which}`);
     el.hidden = false;
     el.querySelector<HTMLElement>("button, input, select")?.focus();
