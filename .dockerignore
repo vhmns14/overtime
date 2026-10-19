@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-preview
+.wrangler
+.overtime-data
+test-results
+playwright-report
+shots
+smoke-out
+art
+docs
+e2e
+tests
+preview.html
+*.log
+.git

@@ -48,7 +48,7 @@ const bstub = (env: BuildingEnv, id: string) => env.EXT_BUILDINGS.get(env.EXT_BU
 const ostub = (env: ExtEnv, id: string) => env.EXT_OFFICES.get(env.EXT_OFFICES.idFromName(id)) as unknown as OfficeMetaRPC;
 
 export function newBuildingId(): string {
-  const b = new Uint8Array(10);
+  const b = new Uint8Array(12);
   crypto.getRandomValues(b);
   return "bd-" + Array.from(b, (x) => "abcdefghijklmnopqrstuvwxyz0123456789"[x % 36]).join("").slice(0, 12);
 }

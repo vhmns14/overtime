@@ -10,3 +10,4 @@ shots/
 smoke-out/
 __pycache__/
 .pytest_cache/
+.overtime-data/

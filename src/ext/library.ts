@@ -37,7 +37,7 @@ export type LibraryEffect =
   | { k: "cabinet"; op: "write" | "recall" };
 
 /** How close a tool report and a lifecycle report of the same change must be to count as one. */
-export const MERGE_WINDOW_MS = 20_000;
+export const MERGE_WINDOW_MS = 15_000;
 export const SPINE_COLORS = 15;
 
 export function newLibrary(): LibraryState {
@@ -85,9 +85,10 @@ export function applyLibrary(lib: LibraryState, e: Pick<ExtEvent, "type" | "ts" 
   // merge a tool report and a lifecycle report of the same change (either order)
   const key = `${name}\u0000${kind}`;
   const prev = lib.recent[key];
-  lib.recent[key] = { at: e.ts, source };
   if (Object.keys(lib.recent).length > 400) for (const k of Object.keys(lib.recent)) if (e.ts - lib.recent[k].at > MERGE_WINDOW_MS) delete lib.recent[k];
-  const duplicate = !!prev && prev.source !== source && Math.abs(e.ts - prev.at) <= MERGE_WINDOW_MS;
+  const duplicate = !!prev && prev.source !== "merged" && prev.source !== source && Math.abs(e.ts - prev.at) <= MERGE_WINDOW_MS;
+  // a pair is merged once: the next report of the same kind, from either source, is a new change
+  lib.recent[key] = { at: e.ts, source: duplicate ? "merged" : source };
 
   let b = lib.skills[name];
   if (duplicate) {

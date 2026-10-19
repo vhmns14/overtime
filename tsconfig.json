@@ -24,6 +24,7 @@
   ],
   "exclude": [
     "tests/ext-worker.test.ts",
+    "tests/office-building.test.ts",
     "tests/helpers/**"
   ]
 }

@@ -281,3 +281,20 @@ def test_cost_estimate_is_attached_off_the_hook_thread():
 ])
 def test_command_head_matches_the_overtime_mapper(cmd, head):
     assert ho.command_head(cmd) == head
+
+
+def test_skills_and_memory_keep_names_only_at_metadata():
+    env = ho.build_envelope("post_tool_call", {"tool_name": "skill_manage", "args": {"action": "create", "name": "deploy-checklist", "content": "BODY OF THE SKILL", "category": "ops"}, "session_id": "s1", "status": "ok"}, "metadata")
+    assert env["tool_input"] == {"action": "create", "name": "deploy-checklist"}
+    mem = ho.build_envelope("post_tool_call", {"tool_name": "memory", "args": {"action": "add", "target": "user", "content": "likes tea"}, "session_id": "s1", "status": "ok"}, "metadata")
+    assert mem["tool_input"] == {"action": "add", "target": "user"}
+    assert "likes tea" not in json.dumps(mem)
+
+
+def test_skill_lifecycle_hook_is_observed_with_name_and_counts():
+    assert "on_skill_lifecycle" in ho.OBSERVER_HOOKS
+    env = ho.build_envelope("on_skill_lifecycle", {"action": "patched", "skill_name": "pytest-fixer", "provenance": "agent_created", "task_id": "t1", "session_id": "s1", "use_count": 4, "reused": True, "reuse_after_patch": False}, "metadata")
+    assert env["extra"]["skill_name"] == "pytest-fixer"
+    assert env["extra"]["action"] == "patched"
+    assert env["extra"]["use_count"] == 4
+    assert env["session_id"] == "s1"
