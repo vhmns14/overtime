@@ -5,6 +5,9 @@ test-results
 playwright-report
 .wrangler
 .dev.vars
+.env
+.env.*
+*.pem
 *.log
 shots/
 smoke-out/

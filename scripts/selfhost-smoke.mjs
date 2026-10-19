@@ -2,7 +2,7 @@
 // Self-host smoke test (what the Docker image runs, without Docker): starts scripts/selfhost.mjs on a
 // temporary data directory, creates an office, a building and events, restarts the server, and checks
 // that everything is still there. Usage: npm run build && node scripts/selfhost-smoke.mjs
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -14,10 +14,12 @@ const data = process.env.SMOKE_DATA ?? mkdtempSync(join(tmpdir(), "overtime-data
 const base = `http://127.0.0.1:${port}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
+// a secret that must reach the Worker but never appear in any process' command line
+const SECRET = `smoke-secret-${Math.random().toString(36).slice(2)}`;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
 
 function start() {
-  const child = spawn(process.execPath, [join(root, "scripts/selfhost.mjs")], { cwd: root, env: { ...process.env, PORT: port, HOST: "127.0.0.1", OVERTIME_DATA: data, INSPECTOR_PORT: String(9460 + Math.floor(Math.random() * 30)) }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [join(root, "scripts/selfhost.mjs")], { cwd: root, env: { ...process.env, PORT: port, HOST: "127.0.0.1", OVERTIME_DATA: data, PUBLIC_URL: "https://smoke.overtime.example", OVERTIME_SECRET_KEY: SECRET, INSPECTOR_PORT: String(9460 + Math.floor(Math.random() * 30)) }, stdio: ["ignore", "pipe", "pipe"] });
   let log = "";
   child.stdout.on("data", (d) => (log += d));
   child.stderr.on("data", (d) => (log += d));
@@ -55,6 +57,13 @@ const ctlPy = await fetch(`${base}/hermes-overtime/overtime_control.py`);
 check(ctlPy.ok && (await ctlPy.text()).includes("resolve_gateway_approval"), "remote-control module served at /hermes-overtime/overtime_control.py");
 const en = await json(await fetch(`${base}/api/ext/runs/${o.runId}/control/enable`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${o.ingestToken}` }, body: JSON.stringify({ device: "Smoke" }) }));
 check(en.status === 201 && String(en.body.controlToken).startsWith("ot_ctl_"), "remote control enabled (first device paired with the ingest token)");
+const pr = await json(await fetch(`${base}/api/ext/runs/${o.runId}/control/devices`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${en.body.controlToken}` }, body: JSON.stringify({ name: "Phone" }) }));
+check(pr.status === 201 && String(pr.body.watch).startsWith("https://smoke.overtime.example/watch/") && /&p=ot_pair_/.test(pr.body.watch), "PUBLIC_URL reaches the Worker (pairing link uses it, one-time code)");
+let argv = "";
+try { argv = execFileSync("ps", ["-eo", "args"], { encoding: "utf8" }); } catch { argv = ""; }
+check(argv !== "" && !argv.includes(SECRET), "secrets are not on any process command line (ps)");
+const sums = await fetch(`${base}/hermes-overtime/SHA256SUMS`);
+check(sums.ok && /^[0-9a-f]{64}  __init__\.py$/m.test(await sums.text()), "installer checksums served at /hermes-overtime/SHA256SUMS");
 const app = await fetch(`${base}/building/${b.buildingId}`);
 check(app.ok && /<div id="app"/.test(await app.text()), "app shell served for /building/<id>");
 

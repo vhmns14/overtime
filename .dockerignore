@@ -13,4 +13,8 @@ e2e
 tests
 preview.html
 *.log
+.env
+.env.*
+.dev.vars
+*.pem
 .git

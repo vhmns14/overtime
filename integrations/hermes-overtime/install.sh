@@ -9,14 +9,18 @@
 #   # or let the installer create a new office on your Overtime server
 #   curl -fsSL https://<overtime>/hermes-overtime/install.sh | sh -s -- --server https://<overtime> --create
 #
+# The token can also come from the environment (OVERTIME_TOKEN=ot_ing_… sh install.sh --url …), which
+# keeps it out of your shell history and the process list.
 # Options: --privacy metadata|args|full (default metadata) · --name "My Hermes" (with --create)
 #          --hermes-home DIR (default $HERMES_HOME or ~/.hermes) · --no-enable · --no-test
 #          --remote-approval · --remote-tasks   opt in to remote control (also turn it on in the office;
 #          --remote-tasks also needs API_SERVER_ENABLED=true and API_SERVER_KEY in the same .env)
 # Needs: sh, curl. Uses python3 for JSON when it is there (Hermes always has it).
 set -eu
+# everything this script writes (the .env with your tokens, its temp copy) is private to you
+umask 077
 
-URL="" TOKEN="" PRIVACY="metadata" SERVER="" CREATE=0 NAME="" ENABLE=1 TEST=1 RAPPROVAL=0 RTASKS=0
+URL="" TOKEN="${OVERTIME_TOKEN:-}" PRIVACY="metadata" SERVER="" CREATE=0 NAME="" ENABLE=1 TEST=1 RAPPROVAL=0 RTASKS=0
 HH="${HERMES_HOME:-$HOME/.hermes}"
 
 say() { printf '%s\n' "overtime: $*"; }
@@ -67,16 +71,41 @@ fi
 printf '%s' "$URL" | grep -Eq '^https?://[^/]+/api/ext/runs/of-[a-z0-9]{8,24}/hermes$' || die "--url should look like https://<overtime>/api/ext/runs/of-…/hermes"
 printf '%s' "$TOKEN" | grep -Eq '^ot_ing_[A-Za-z0-9_-]{16,}$' || die "--token should be the office's ingest token (ot_ing_…)"
 ORIGIN=$(printf '%s' "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')
+case "$ORIGIN" in
+  http://localhost*|http://127.*|http://10.*|http://192.168.*|http://\[::1\]*) ;;
+  http://*) say "warning: $ORIGIN is plain http; the ingest token travels unencrypted. Use https outside a private network." ;;
+esac
+
+# curl with the token in a header read from stdin, never on the command line (ps shows argv)
+curl_auth() { printf 'authorization: Bearer %s\n' "$TOKEN" | curl -H @- "$@"; }
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+  elif command -v python3 >/dev/null 2>&1; then python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"
+  else echo ""; fi
+}
 
 # 1. the plugin: two files, no dependencies
 DIR="$HH/plugins/hermes-overtime"
 mkdir -p "$DIR"
+# checksums published by the same server: they catch truncated or mixed-version downloads (they are
+# not a signature: whoever controls the server controls both)
+SUMS=$(curl -fsSL "$ORIGIN/hermes-overtime/SHA256SUMS" 2>/dev/null || true)
+verify() { # verify <name> <file>
+  want=$(printf '%s\n' "$SUMS" | awk -v f="$1" '$2 == f { print $1 }')
+  [ -n "$want" ] || return 0
+  got=$(sha256_of "$2")
+  [ -z "$got" ] || [ "$got" = "$want" ] || { rm -f "$2"; die "checksum mismatch for $1 (expected $want, got $got)"; }
+}
 for f in plugin.yaml __init__.py; do
   curl -fsSL "$ORIGIN/hermes-overtime/$f" -o "$DIR/$f.tmp" || die "could not download $ORIGIN/hermes-overtime/$f"
+  verify "$f" "$DIR/$f.tmp"
   mv "$DIR/$f.tmp" "$DIR/$f"
 done
 # the remote-control module: loaded only when OVERTIME_REMOTE_APPROVAL / OVERTIME_REMOTE_TASKS is set
 if curl -fsSL "$ORIGIN/hermes-overtime/overtime_control.py" -o "$DIR/overtime_control.py.tmp" 2>/dev/null; then
+  verify overtime_control.py "$DIR/overtime_control.py.tmp"
   mv "$DIR/overtime_control.py.tmp" "$DIR/overtime_control.py"
 else
   rm -f "$DIR/overtime_control.py.tmp"
@@ -122,7 +151,7 @@ if [ "$TEST" = 1 ]; then
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   sid="overtime-install-$(date +%s)"
   batch=$(printf '{"batch":[{"hook_event_name":"on_session_start","session_id":"%s","extra":{"model":"installer","platform":"cli"},"timestamp":"%s"},{"hook_event_name":"on_session_end","session_id":"%s","extra":{"completed":true},"timestamp":"%s"}]}' "$sid" "$now" "$sid" "$now")
-  if curl -fsS -X POST "$URL" -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" -d "$batch" >/dev/null; then
+  if curl_auth -fsS -X POST "$URL" -H 'content-type: application/json' -d "$batch" >/dev/null; then
     say "test event delivered"
   else
     die "Overtime did not accept the test event: check that this machine can reach $ORIGIN and that the token is right"
@@ -130,7 +159,7 @@ if [ "$TEST" = 1 ]; then
 fi
 
 SHARE=$(printf '%s' "$URL" | sed -E 's#/hermes$#/share#')
-WATCH=$(curl -fsS "$SHARE" -H "authorization: Bearer $TOKEN" 2>/dev/null | json_get watch || true)
+WATCH=$(curl_auth -fsS "$SHARE" 2>/dev/null | json_get watch || true)
 say "done. Restart Hermes (a new 'hermes' session, or restart the gateway) and run any task."
 [ -n "$WATCH" ] && say "watch it here (read-only link): $WATCH"
 exit 0

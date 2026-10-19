@@ -5,7 +5,10 @@ services:
     build: .
     image: overtime:local
     ports:
-      - "8787:8787"
+      # loopback only by default: put a reverse proxy or tunnel in front (docs/SELF_HOST.md, A3).
+      # Docker-published ports bypass host firewalls such as ufw; set OVERTIME_BIND=0.0.0.0 only on a
+      # private network you trust.
+      - "${OVERTIME_BIND:-127.0.0.1}:8787:8787"
     volumes:
       - overtime-data:/data
     environment:
