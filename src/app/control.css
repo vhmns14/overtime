@@ -1,0 +1,50 @@
+/* Remote control (approvals, tasks, notifications): same paper/ink/accent language as the panel. */
+.ctl-approval { display: grid; gap: 12px; background: var(--card); border: 2px solid var(--ink); border-radius: var(--r); padding: 14px 15px 15px; box-shadow: 0 2px 0 rgba(20, 18, 16, .08); }
+.ctl-approval.has-pending { border-color: var(--accent); box-shadow: 4px 4px 0 var(--ink); }
+.ctl-approval .approval-title { margin: 0 0 6px; }
+.ctl-approval .hx-pending { margin: 0 0 8px; font-size: 14px; }
+.ctl-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ctl-actions .btn { min-height: 42px; font-size: 15px; white-space: nowrap; padding: 8px 10px; }
+.ctl-more { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; margin-top: 9px; font-size: 12.5px; }
+.ctl-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border: 1.5px solid var(--ink); border-radius: 99px; font: 600 11px/1.5 var(--mono); vertical-align: 2px; }
+.ctl-done { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; }
+.ctl-done span { color: var(--muted); }
+.ctl-done > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ctl-dot { flex: 0 0 auto; width: 11px; height: 11px; margin-top: 4px; border-radius: 50%; background: var(--good); }
+.ctl-dot.deny { background: var(--bad); }
+.ctl-dot.warn { background: #b8860b; }
+.ctl-tasks { display: grid; gap: 8px; }
+.ctl-tasks textarea { width: 100%; padding: 9px 11px; font: inherit; font-size: 14.5px; background: var(--card); border: 2px solid var(--ink); border-radius: var(--r); resize: vertical; }
+.ctl-confirm { display: grid; gap: 8px; padding: 12px; border: 2px solid var(--accent); border-radius: var(--r); background: var(--card); font-size: 13.5px; }
+.ctl-confirm p { margin: 0; }
+.ctl-confirm .diff { margin: 0; white-space: pre-wrap; max-height: 140px; }
+.ctl-cmds { margin: 0; padding: 0; list-style: none; display: grid; gap: 5px; font-size: 12.5px; }
+.ctl-cmds li { overflow-wrap: anywhere; }
+.ctl-cmds small { color: var(--bad); }
+.ctl-state { display: inline-block; padding: 0 6px; border: 1.5px solid var(--ink); border-radius: 4px; font: 600 11px/1.6 var(--mono); }
+.ctl-state.s-started, .ctl-state.s-claimed { background: var(--accent); color: var(--accent-ink); }
+.ctl-state.s-completed { background: var(--ink); color: var(--paper); }
+.ctl-state.s-failed, .ctl-state.s-rejected, .ctl-state.s-lost { border-color: var(--bad); color: var(--bad); }
+.ctl-p { color: var(--ink-2); }
+.ctl-settings .err { padding: 10px 12px; border: 2px solid var(--bad); border-radius: var(--r); background: #fbe9e3; color: #5d1b0b; font-size: 13px; margin: 0; }
+.ctl-settings p.ctl-ok, .ctl-ok { color: #1f6a1a; font-size: 12.5px; }
+.ctl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.ctl-grid .check { font-size: 13px; }
+.ctl-quiet { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: 13px; }
+.ctl-time input { padding: 5px 8px; }
+.ctl-quiet small { color: var(--muted); font: 11.5px var(--mono); }
+.ctl-channel { display: grid; gap: 7px; padding: 12px; border: 1.5px solid var(--ink); border-radius: var(--r); background: var(--card); font-size: 13.5px; }
+.ctl-channel .field input { width: 100%; font: 12.5px var(--mono); }
+.ctl-devices { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 13.5px; }
+.ctl-pair { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.ctl-pair .field { flex: 1 1 180px; }
+.ctl-settings .hx-snippet pre { white-space: pre-wrap; word-break: break-all; }
+.ctl-audit { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font: 12px/1.45 var(--mono); color: var(--ink-2); max-height: 280px; overflow: auto; }
+.ctl-audit span { color: var(--muted); margin-right: 6px; }
+@media (max-width: 760px) {
+  /* phones: the approval becomes a bottom sheet over the office */
+  .ctl-approval.has-pending { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 110; max-height: 78vh; overflow: auto; box-shadow: 0 -6px 30px rgba(0, 0, 0, .45), 4px 4px 0 var(--ink); }
+  .ctl-actions .btn { min-height: 48px; font-size: 16.5px; }
+  .ctl-grid { grid-template-columns: 1fr; }
+  .ctl-tasks textarea { font-size: 16px; }
+}
