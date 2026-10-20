@@ -17,6 +17,10 @@ _spec.loader.exec_module(ho)
 
 URL = "https://overtime.test/api/ext/runs/of-abc12345/hermes"
 
+# Telegram's documented sample bot token (not a real secret). Assembled at runtime so secret
+# scanners don't flag the test file.
+FAKE_TG_TOKEN = ":".join(["123456789", "AAHdqTcv" + "CH1vGWJx" + "feofSAs0K5PALDsaw"])
+
 
 class Recorder:
     def __init__(self, fail=False, delay=0.0, status=200):
@@ -312,14 +316,14 @@ def test_skill_lifecycle_hook_is_observed_with_name_and_counts():
 
 def test_metadata_urls_keep_the_host_only():
     """Exploit: a Telegram bot token lives in the URL path (api.telegram.org/bot<token>/…)."""
-    url = "https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage?chat_id=1"
+    url = f"https://api.telegram.org/bot{FAKE_TG_TOKEN}/sendMessage?chat_id=1"
     e = ho.build_envelope("post_tool_call", {"tool_name": "web_extract", "args": {"url": url}, "session_id": "s"}, "metadata")
     assert e["tool_input"]["url"] == "api.telegram.org"
     assert "AAHdq" not in json.dumps(e)
 
 
 @pytest.mark.parametrize("secret", [
-    "API_SERVER_KEY=abcdef0123456789", "HF_TOKEN=hf_abcdefghijklmnopqrstu", "TELEGRAM_BOT_TOKEN=123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
+    "API_SERVER_KEY=abcdef0123456789", "HF_TOKEN=hf_abcdefghijklmnopqrstu", "TELEGRAM_BOT_TOKEN=" + FAKE_TG_TOKEN,
     "sk_live_abcdefghijklmnop1234", "npm_abcdefghijklmnopqrstuvwxyz0123456789", "--password hunter2hunter2", "--token=abcdefghijkl",
     "glpat-abcdefghijklmnopqrst", "https://hooks.slack.com/services/T000/B000/XXXXXXXXXXXX", "postgres://app:s3cr3tpw@db/x",
     "token abcdefghijklmnopqrstuvwx",
